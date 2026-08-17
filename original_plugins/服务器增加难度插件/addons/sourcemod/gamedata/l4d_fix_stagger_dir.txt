@@ -1,0 +1,20 @@
+"Games"
+{
+	"left4dead2"
+	{
+		"Offsets"
+		{
+			"CTerrorPlayer::m_PlayerAnimState"
+			{
+				"linux"			"10512"
+				"windows"		"10524"
+			}
+
+			"m_flEyeYaw"
+			{
+				"linux"			"228"
+				"windows"		"228"
+			}
+		}
+	}
+}

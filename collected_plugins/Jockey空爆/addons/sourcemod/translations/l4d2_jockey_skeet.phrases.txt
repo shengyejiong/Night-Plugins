@@ -1,0 +1,15 @@
+"Phrases"
+{
+	"L4D2JockeySkeet_Skeeted"
+	{
+		"en"		"{green}★★{default} You were {blue}skeeted{default} by {olive}%N{default}."
+	}
+	"L4D2JockeySkeet_SkeetedJockey"
+	{
+		"en"		"{green}★★{default} You {blue}skeeted {olive}%N{default}'s Jockey."
+	}
+	"L4D2JockeySkeet_JockeySkeeted"
+	{
+		"en"		"{green}★★{default} {olive}%N{default}'s Jockey was {blue}skeeted{default} by {olive}%N{default}."
+	}
+}

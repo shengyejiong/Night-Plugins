@@ -1,0 +1,26 @@
+"Games"
+{
+	"left4dead2"
+	{
+		"Offsets"
+		{
+			"CTerrorPlayer::m_PlayerAnimState"
+			{
+				"linux"		"10512"
+				"windows"	"10524"
+			}
+
+			"CTerrorPlayerAnimState::ResetMainActivity"
+			{
+				"linux"		"5"
+				"windows"	"5"
+			}
+
+			"CTerrorPlayerAnimState::m_bCharged"
+			{
+				"linux"		"344"
+				"windows"	"344"
+			}
+		}
+	}
+}
