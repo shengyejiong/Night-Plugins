@@ -14,12 +14,14 @@
 | [抽象操作通报](<original_plugins/抽象操作通报插件/>) | night / 1.1.0 | 通报炸队友、多撞、Witch 责任和高额友伤等操作 | 无 | Left 4 DHooks |
 | [胆汁砸队友](<original_plugins/胆汁砸队友/>) | night / 1.0.0 | 胆汁瓶爆炸时使附近队友受到胆汁效果 | 无 | Left 4 DHooks |
 | [动态调整子弹上限](<original_plugins/动态调整子弹上限（协同specialspawner插件）/>) | morzlee、night / 1.1.0 | 根据特感数量动态调整备弹上限 | `!da_status`、`!da_recalc` | `specialspawner` |
-| [多特经验分](<original_plugins/服务器经验分插件/>) | night / 1.7.0 | 计算回合表现、长期经验分和个人排名 | `!mexp`、`!mexp_round`、`!mexp_enable` | 技巧分可配合 `l4d2_skill_detect` |
+| [根据路程动态减难](<original_plugins/根据路程动态减难插件/>) | night / 1.0.0 | 根据团灭次数和路程投票开启止痛药与路程复活 | `!flowassist_status`、`!flowassist_reset` | Left 4 DHooks、`l4d2_nativevote` |
+| [满槽稳定多特感](<original_plugins/满槽稳定多特感插件/>) | Tordecybombo、breezy、night / 1.3.8-night | 满槽时停止无效特感创建，并在槽位释放后恢复补刷 | `!weight`、`!limit`、`!timer`、`!resetspawn`、`!forcetimer` | Left 4 DHooks；不能与原版同时加载 |
+| [多特经验分](<original_plugins/服务器经验分插件/>) | night / 1.7.4 | 计算回合表现、长期经验分和个人排名 | `!mexp`、`!mexp_round`、`!mexp_weapon`、`!mexp_enable` | 技巧分可配合 `l4d2_skill_detect` |
 | [服务器增加难度](<original_plugins/服务器增加难度插件/>) | Visor、A1m、Forgetest、CanadaRox、night / 4.4.0 | 集中控制 Tank、特感、推击、起身和石头等难度选项 | `!tankdiff`、`!tankdifficulty` | Left 4 DHooks、Actions 扩展及 GameData |
 | [开局随机近战](<original_plugins/开局随机生成两把近战/>) | N3wton、night / 1.1.0 | 回合开始时生成一把或两把随机近战武器 | `!melee` | 指令需要管理员权限 |
 | [坦克打铁训练](<original_plugins/坦克打铁训练/>) | night / 1.1.0 | 提供可打物件重置、Bot 控制和训练辅助 | `!tanktraining`、`!hittable`、`!tk` | Left 4 DHooks；默认关闭 |
 | [修改爪击伤害](<original_plugins/修改爪击伤害/>) | night / 1.0.2 | 只调整特感普通爪击及 Charger 普通拳击伤害 | 无 | 不影响控制、撞墙和砸地伤害 |
-| [友伤过高封禁](<original_plugins/友伤过高踢出/>) | night / 1.1 | 每关统计友伤，达到阈值后临时封禁非管理员 | 无 | 默认阈值 100，封禁 5 分钟 |
+| [友伤过高封禁](<original_plugins/友伤过高踢出/>) | night / 1.2.0 | 每关统计站立生还者受到的友伤，达到阈值后临时封禁非管理员 | 无 | 倒地友伤不累计；默认阈值 100，封禁 5 分钟 |
 | [HUD 增加弹量显示](<original_plugins/hud增加显示弹量（基于豆瓣酱插件包）/>) | 豆瓣酱な、sorallll、らくらく安楽死、night / 2.21.31 | 在 HUD 中显示弹药等状态 | `!hud` | 依赖豆瓣酱插件包中的 HUD、模拟及 DHooks 组件 |
 
 ## 收集插件

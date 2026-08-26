@@ -32,14 +32,16 @@
 #define DecayWeapon_SniperMilitary   4
 #define DecayWeapon_SniperScout      5
 #define DecayWeapon_SniperAWP        6
-#define DecayWeapon_Count            7
+#define DecayWeapon_AutoShotgun      7
+#define DecayWeapon_SpasShotgun      8
+#define DecayWeapon_Count            9
 
 public Plugin myinfo =
 {
     name = "L4D2 Multi-SI Campaign Experience",
     author = "night",
     description = "Round and long-term experience rating for multi-SI coop servers.",
-    version = "1.7.0",
+    version = "1.7.4",
     url = ""
 };
 
@@ -98,7 +100,10 @@ ConVar g_hWeaponMult_SniperAWP;
 ConVar g_hWeaponDecayEnable;
 ConVar g_hWeaponDecayStart;
 ConVar g_hWeaponDecayZero;
+ConVar g_hWeaponDecayAutoShotgunStart;
+ConVar g_hWeaponDecayAutoShotgunZero;
 ConVar g_hWeaponDecayRecoveryRate;
+ConVar g_hWeaponDecayNotifyRearmBuffer;
 
 ConVar g_hW_AccuracyStep;
 ConVar g_hAccuracyMinShots;
@@ -158,6 +163,13 @@ bool  g_bRockDestroyAwarded[MAX_TRACKED_ENTITIES];
 float g_fDecayWeaponTime[MAXPLAYERS + 1][DecayWeapon_Count];
 float g_fDecayWeaponUpdatedAt[MAXPLAYERS + 1][DecayWeapon_Count];
 int   g_iActiveDecayWeapon[MAXPLAYERS + 1];
+bool  g_bDecayStartNotified[MAXPLAYERS + 1][DecayWeapon_Count];
+bool  g_bDecayZeroNotified[MAXPLAYERS + 1][DecayWeapon_Count];
+bool  g_bPendingInfectedDamage[MAXPLAYERS + 1];
+int   g_iPendingDamageAttacker[MAXPLAYERS + 1];
+int   g_iPendingDamagePreHealth[MAXPLAYERS + 1];
+int   g_iPendingDamageZombieClass[MAXPLAYERS + 1];
+float g_fPendingDamageMultiplier[MAXPLAYERS + 1];
 
 int   g_iSkeets[MAXPLAYERS + 1];
 int   g_iMeleeSkeets[MAXPLAYERS + 1];
@@ -265,11 +277,14 @@ public void OnPluginStart()
     g_hWeaponMult_SniperMilitary = CreateConVar("l4d2_mexp_weapon_mult_sniper_military", "0.84", "Damage score multiplier for military sniper.", FCVAR_NOTIFY, true, 0.0);
     g_hWeaponMult_SniperScout = CreateConVar("l4d2_mexp_weapon_mult_sniper_scout", "0.75", "Damage score multiplier for Scout sniper.", FCVAR_NOTIFY, true, 0.0);
     g_hWeaponMult_SniperAWP = CreateConVar("l4d2_mexp_weapon_mult_sniper_awp", "0.70", "Damage score multiplier for AWP sniper.", FCVAR_NOTIFY, true, 0.0);
-    g_hWeaponDecayEnable = CreateConVar("l4d2_mexp_weapon_decay_enable", "1", "0=Disable per-weapon usage decay, 1=Enable for rifles and sniper rifles.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
+    g_hWeaponDecayEnable = CreateConVar("l4d2_mexp_weapon_decay_enable", "1", "0=Disable per-weapon usage decay, 1=Enable for rifles, sniper rifles, and auto shotguns.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
     g_hWeaponDecayEnable.AddChangeHook(ConVarChanged_WeaponDecayEnable);
     g_hWeaponDecayStart = CreateConVar("l4d2_mexp_weapon_decay_start", "120.0", "Full damage score multiplier before this many accumulated active-use seconds.", FCVAR_NOTIFY, true, 0.0);
     g_hWeaponDecayZero = CreateConVar("l4d2_mexp_weapon_decay_zero", "420.0", "Damage score multiplier reaches zero at this many accumulated active-use seconds.", FCVAR_NOTIFY, true, 0.0);
+    g_hWeaponDecayAutoShotgunStart = CreateConVar("l4d2_mexp_weapon_decay_autoshotgun_start", "180.0", "Full damage score multiplier duration for auto shotguns.", FCVAR_NOTIFY, true, 0.0);
+    g_hWeaponDecayAutoShotgunZero = CreateConVar("l4d2_mexp_weapon_decay_autoshotgun_zero", "600.0", "Auto-shotgun damage score multiplier reaches zero at this accumulated active-use time.", FCVAR_NOTIFY, true, 0.0);
     g_hWeaponDecayRecoveryRate = CreateConVar("l4d2_mexp_weapon_decay_recovery_rate", "1.0", "Usage seconds recovered per second while that weapon class is not active.", FCVAR_NOTIFY, true, 0.0);
+    g_hWeaponDecayNotifyRearmBuffer = CreateConVar("l4d2_mexp_weapon_decay_notify_rearm_buffer", "20.0", "Usage-time recovery required below a threshold before its decay notification can trigger again.", FCVAR_NOTIFY, true, 0.0);
 
     g_hW_AccuracyStep = CreateConVar("l4d2_mexp_w_accuracy_step", "1.0", "Score per accuracy step after floor is reached.", FCVAR_NOTIFY, true, 0.0);
     g_hAccuracyMinShots = CreateConVar("l4d2_mexp_accuracy_min_shots", "80", "Minimum tracked weapon fires required before accuracy bonus can apply.", FCVAR_NOTIFY, true, 0.0);
@@ -316,6 +331,7 @@ public void OnPluginStart()
     HookEvent("player_entered_checkpoint", Event_PlayerEnteredCheckpoint, EventHookMode_Post);
     HookEvent("player_left_checkpoint", Event_PlayerLeftCheckpoint, EventHookMode_Post);
     HookEvent("weapon_fire", Event_WeaponFire, EventHookMode_Post);
+    HookEvent("player_hurt", Event_PlayerHurt, EventHookMode_Post);
     HookEvent("player_death", Event_PlayerDeath, EventHookMode_Pre);
     HookEvent("infected_death", Event_InfectedDeath, EventHookMode_Post);
     HookEvent("infected_hurt", Event_InfectedHurt, EventHookMode_Post);
@@ -335,6 +351,7 @@ public void OnPluginStart()
 
     RegConsoleCmd("sm_mexp", Command_ShowExp, "Show your multi-SI campaign experience rating.");
     RegConsoleCmd("sm_mexp_round", Command_ShowRound, "Show current round experience stats.");
+    RegConsoleCmd("sm_mexp_weapon", Command_ShowWeapon, "Show current weapon damage-score decay status.");
     RegAdminCmd("sm_mexp_enable", Command_MExpEnable, ADMFLAG_CONVARS, "Open or change multi-SI experience scoring switch.");
 
     ResetAllRoundStats();
@@ -785,14 +802,6 @@ public Action Command_ShowRound(int client, int args)
         g_iSaferoomDeaths[client]
     );
 
-    if (g_iEndgameOutsideIncaps[client] > 0 || g_iEndgameOutsideDeaths[client] > 0)
-    {
-        PrintToChat(client, "\x04[终点]\x01 安全屋外倒地 %d | 安全屋外死亡 %d | 仅影响长期掉分保护",
-            g_iEndgameOutsideIncaps[client],
-            g_iEndgameOutsideDeaths[client]
-        );
-    }
-
     PrintToChat(client, "\x04[失误]\x01 拳 %d | 打铁 %d | 酸 %.0f | 友伤 %.0f",
         g_iTankPunches[client],
         g_iTankHittables[client],
@@ -814,8 +823,23 @@ public Action Command_ShowRound(int client, int args)
         skillBonus
     );
 
-    ShowWeaponDecayStatus(client);
+    return Plugin_Handled;
+}
 
+public Action Command_ShowWeapon(int client, int args)
+{
+    if (!IsValidClient(client))
+    {
+        return Plugin_Handled;
+    }
+
+    if (!IsExperienceEnabled())
+    {
+        PrintToChat(client, "\x04[武器]\x01 当前地图经验分计分已关闭，武器持用时间不会记录。");
+        return Plugin_Handled;
+    }
+
+    ShowWeaponDecayStatus(client);
     return Plugin_Handled;
 }
 
@@ -1084,6 +1108,7 @@ public void Event_WeaponFire(Event event, const char[] name, bool dontBroadcast)
     }
 
     g_iAccuracyShots[client]++;
+    CheckActiveWeaponDecayNotification(client);
 }
 
 public Action OnTakeDamage(int victim, int &attacker, int &inflictor, float &damage, int &damagetype)
@@ -1097,6 +1122,8 @@ public Action OnTakeDamage(int victim, int &attacker, int &inflictor, float &dam
     {
         return Plugin_Continue;
     }
+
+    ClearPendingInfectedDamage(victim);
 
     bool victimStanding = IsValidSurvivor(victim) && !IsSurvivorIncapacitatedOrHanging(victim);
 
@@ -1140,23 +1167,75 @@ public Action OnTakeDamage(int victim, int &attacker, int &inflictor, float &dam
     {
         CountAccuracyHit(attacker);
 
-        float scaledDamage = damage * GetWeaponScoreMultiplier(attacker);
-        int zc = GetZombieClass(victim);
-        if (IsNormalSpecialClass(zc) && ShouldTrackClient(attacker))
+        if (ShouldTrackClient(attacker))
         {
-            g_fSIRawDamage[attacker] += damage;
-            g_fSIDamage[attacker] += scaledDamage;
-        }
-        else if (zc == ZC_TANK && ShouldTrackClient(attacker))
-        {
-            g_fTankRawDamage[attacker] += damage;
-            g_fTankDamage[attacker] += scaledDamage;
-            g_fTankDamageByTank[victim][attacker] += scaledDamage;
-            g_fTankRawDamageByTank[victim][attacker] += damage;
+            int zc = GetZombieClass(victim);
+            int health = GetClientHealth(victim);
+            if ((IsNormalSpecialClass(zc) || zc == ZC_TANK) && health > 0)
+            {
+                // Damage-fix plugins may rewrite damage later; player_hurt resolves the real health loss.
+                g_bPendingInfectedDamage[victim] = true;
+                g_iPendingDamageAttacker[victim] = attacker;
+                g_iPendingDamagePreHealth[victim] = health;
+                g_iPendingDamageZombieClass[victim] = zc;
+                g_fPendingDamageMultiplier[victim] = GetWeaponScoreMultiplier(attacker);
+            }
         }
     }
 
     return Plugin_Continue;
+}
+
+public void Event_PlayerHurt(Event event, const char[] name, bool dontBroadcast)
+{
+    if (!IsExperienceEnabled())
+    {
+        return;
+    }
+
+    int victim = GetClientOfUserId(event.GetInt("userid"));
+    if (!IsValidClient(victim) || !g_bPendingInfectedDamage[victim])
+    {
+        return;
+    }
+
+    int attacker = GetClientOfUserId(event.GetInt("attacker"));
+    int pendingAttacker = g_iPendingDamageAttacker[victim];
+    int preHealth = g_iPendingDamagePreHealth[victim];
+    int zc = g_iPendingDamageZombieClass[victim];
+    float weaponMultiplier = g_fPendingDamageMultiplier[victim];
+    ClearPendingInfectedDamage(victim);
+
+    if (attacker != pendingAttacker || !IsValidSurvivor(attacker) || !ShouldTrackClient(attacker))
+    {
+        return;
+    }
+
+    int postHealth = event.GetInt("health");
+    if (postHealth < 0)
+    {
+        postHealth = 0;
+    }
+
+    float actualDamage = float(preHealth - postHealth);
+    if (actualDamage <= 0.0)
+    {
+        return;
+    }
+
+    float scaledDamage = actualDamage * weaponMultiplier;
+    if (IsNormalSpecialClass(zc))
+    {
+        g_fSIRawDamage[attacker] += actualDamage;
+        g_fSIDamage[attacker] += scaledDamage;
+    }
+    else if (zc == ZC_TANK)
+    {
+        g_fTankRawDamage[attacker] += actualDamage;
+        g_fTankDamage[attacker] += scaledDamage;
+        g_fTankDamageByTank[victim][attacker] += scaledDamage;
+        g_fTankRawDamageByTank[victim][attacker] += actualDamage;
+    }
 }
 
 public Action OnTankRockTakeDamage(int entity, int &attacker, int &inflictor, float &damage, int &damagetype)
@@ -2131,7 +2210,7 @@ float GetWeaponScoreMultiplier(int client)
         multiplier = g_hWeaponMult_SniperAWP.FloatValue;
     }
 
-    return multiplier * GetDecayWeaponScoreMultiplier(client, decayWeapon);
+    return multiplier * GetDecayWeaponScoreMultiplier(client, decayWeapon, true);
 }
 
 int GetDecayWeaponType(const char[] weapon)
@@ -2163,6 +2242,14 @@ int GetDecayWeaponType(const char[] weapon)
     if (StrEqual(weapon, "weapon_sniper_awp", false))
     {
         return DecayWeapon_SniperAWP;
+    }
+    if (StrEqual(weapon, "weapon_autoshotgun", false))
+    {
+        return DecayWeapon_AutoShotgun;
+    }
+    if (StrEqual(weapon, "weapon_shotgun_spas", false))
+    {
+        return DecayWeapon_SpasShotgun;
     }
 
     return DecayWeapon_None;
@@ -2243,8 +2330,8 @@ float UpdateDecayWeaponTime(int client, int weaponType, float now, bool commit)
         value = 0.0;
     }
 
-    float maxTime = g_hWeaponDecayZero.FloatValue;
-    float startTime = g_hWeaponDecayStart.FloatValue;
+    float maxTime = GetDecayWeaponZeroTime(weaponType);
+    float startTime = GetDecayWeaponStartTime(weaponType);
     if (maxTime < startTime)
     {
         maxTime = startTime;
@@ -2252,6 +2339,36 @@ float UpdateDecayWeaponTime(int client, int weaponType, float now, bool commit)
     if (maxTime >= 0.0 && value > maxTime)
     {
         value = maxTime;
+    }
+
+    if (g_iActiveDecayWeapon[client] != weaponType)
+    {
+        float zeroTime = GetDecayWeaponZeroTime(weaponType);
+        float rearmBuffer = g_hWeaponDecayNotifyRearmBuffer.FloatValue;
+        if (zeroTime < startTime)
+        {
+            zeroTime = startTime;
+        }
+
+        float startRearmTime = startTime - rearmBuffer;
+        float zeroRearmTime = zeroTime - rearmBuffer;
+        if (startRearmTime < 0.0)
+        {
+            startRearmTime = 0.0;
+        }
+        if (zeroRearmTime < 0.0)
+        {
+            zeroRearmTime = 0.0;
+        }
+
+        if (value <= startRearmTime)
+        {
+            g_bDecayStartNotified[client][weaponType] = false;
+        }
+        if (value <= zeroRearmTime)
+        {
+            g_bDecayZeroNotified[client][weaponType] = false;
+        }
     }
 
     if (commit)
@@ -2273,7 +2390,22 @@ float GetDecayWeaponTime(int client, int weaponType)
     return UpdateDecayWeaponTime(client, weaponType, GetGameTime(), false);
 }
 
-float GetDecayWeaponScoreMultiplier(int client, int weaponType)
+void CheckActiveWeaponDecayNotification(int client)
+{
+    if (!g_hWeaponDecayEnable.BoolValue)
+    {
+        return;
+    }
+
+    SyncActiveDecayWeapon(client);
+    int weaponType = g_iActiveDecayWeapon[client];
+    if (weaponType >= 0 && weaponType < DecayWeapon_Count)
+    {
+        GetDecayWeaponScoreMultiplier(client, weaponType, true);
+    }
+}
+
+float GetDecayWeaponScoreMultiplier(int client, int weaponType, bool notifyThreshold = false)
 {
     if (!g_hWeaponDecayEnable.BoolValue || weaponType < 0 || weaponType >= DecayWeapon_Count)
     {
@@ -2281,25 +2413,81 @@ float GetDecayWeaponScoreMultiplier(int client, int weaponType)
     }
 
     float usageTime = GetDecayWeaponTime(client, weaponType);
-    float startTime = g_hWeaponDecayStart.FloatValue;
-    float zeroTime = g_hWeaponDecayZero.FloatValue;
+    float startTime = GetDecayWeaponStartTime(weaponType);
+    float zeroTime = GetDecayWeaponZeroTime(weaponType);
+    float multiplier;
 
     if (zeroTime <= startTime)
     {
-        return usageTime < startTime ? 1.0 : 0.0;
+        multiplier = usageTime < startTime ? 1.0 : 0.0;
+    }
+    else if (usageTime <= startTime)
+    {
+        multiplier = 1.0;
+    }
+    else if (usageTime >= zeroTime)
+    {
+        multiplier = 0.0;
+    }
+    else
+    {
+        multiplier = (zeroTime - usageTime) / (zeroTime - startTime);
     }
 
-    if (usageTime <= startTime)
+    if (notifyThreshold)
     {
-        return 1.0;
+        NotifyWeaponDecayThreshold(client, weaponType, usageTime, startTime, zeroTime, multiplier);
     }
+
+    return multiplier;
+}
+
+void NotifyWeaponDecayThreshold(int client, int weaponType, float usageTime, float startTime, float zeroTime, float multiplier)
+{
+    if (client < 1 || client > MaxClients || weaponType < 0 || weaponType >= DecayWeapon_Count)
+    {
+        return;
+    }
+
+    char weaponName[32];
+    GetDecayWeaponName(weaponType, weaponName, sizeof(weaponName));
 
     if (usageTime >= zeroTime)
     {
-        return 0.0;
+        g_bDecayStartNotified[client][weaponType] = true;
+        if (!g_bDecayZeroNotified[client][weaponType])
+        {
+            g_bDecayZeroNotified[client][weaponType] = true;
+            PrintToChat(client, "\x04[武器]\x01 %s 持用时间倍率已降至 \x03x0.00\x01，换枪后会逐步恢复。", weaponName);
+        }
+        return;
     }
 
-    return (zeroTime - usageTime) / (zeroTime - startTime);
+    if (usageTime >= startTime && !g_bDecayStartNotified[client][weaponType])
+    {
+        g_bDecayStartNotified[client][weaponType] = true;
+        PrintToChat(client, "\x04[武器]\x01 %s 持用时间已进入衰减，伤害分时间倍率 \x03x%.2f\x01。", weaponName, multiplier);
+    }
+}
+
+float GetDecayWeaponStartTime(int weaponType)
+{
+    if (weaponType == DecayWeapon_AutoShotgun || weaponType == DecayWeapon_SpasShotgun)
+    {
+        return g_hWeaponDecayAutoShotgunStart.FloatValue;
+    }
+
+    return g_hWeaponDecayStart.FloatValue;
+}
+
+float GetDecayWeaponZeroTime(int weaponType)
+{
+    if (weaponType == DecayWeapon_AutoShotgun || weaponType == DecayWeapon_SpasShotgun)
+    {
+        return g_hWeaponDecayAutoShotgunZero.FloatValue;
+    }
+
+    return g_hWeaponDecayZero.FloatValue;
 }
 
 void ShowWeaponDecayStatus(int client)
@@ -2369,8 +2557,24 @@ void GetDecayWeaponName(int weaponType, char[] buffer, int maxlen)
         case DecayWeapon_SniperMilitary: strcopy(buffer, maxlen, "30连狙");
         case DecayWeapon_SniperScout: strcopy(buffer, maxlen, "Scout");
         case DecayWeapon_SniperAWP: strcopy(buffer, maxlen, "AWP");
+        case DecayWeapon_AutoShotgun: strcopy(buffer, maxlen, "一代连喷");
+        case DecayWeapon_SpasShotgun: strcopy(buffer, maxlen, "二代连喷");
         default: strcopy(buffer, maxlen, "未知枪械");
     }
+}
+
+void ClearPendingInfectedDamage(int client)
+{
+    if (client < 1 || client > MaxClients)
+    {
+        return;
+    }
+
+    g_bPendingInfectedDamage[client] = false;
+    g_iPendingDamageAttacker[client] = 0;
+    g_iPendingDamagePreHealth[client] = 0;
+    g_iPendingDamageZombieClass[client] = 0;
+    g_fPendingDamageMultiplier[client] = 1.0;
 }
 
 void ResetClientWeaponDecay(int client)
@@ -2386,6 +2590,8 @@ void ResetClientWeaponDecay(int client)
     {
         g_fDecayWeaponTime[client][i] = 0.0;
         g_fDecayWeaponUpdatedAt[client][i] = now;
+        g_bDecayStartNotified[client][i] = false;
+        g_bDecayZeroNotified[client][i] = false;
     }
 }
 
@@ -2745,6 +2951,7 @@ void ClearClientRoundStats(int client)
     g_iEndgameOutsideIncaps[client] = 0;
     g_iEndgameOutsideDeaths[client] = 0;
     g_fFriendlyFire[client] = 0.0;
+    ClearPendingInfectedDamage(client);
     ResetClientWeaponDecay(client);
 }
 
