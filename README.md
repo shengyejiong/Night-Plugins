@@ -9,40 +9,58 @@
 
 ## 原创及自行维护插件
 
-| 插件 | 作者 / 版本 | 主要功能 | 游戏内指令 | 依赖或备注 |
-| --- | --- | --- | --- | --- |
-| [抽象操作通报](<original_plugins/抽象操作通报插件/>) | night / 1.1.0 | 通报炸队友、多撞、Witch 责任和高额友伤等操作 | 无 | Left 4 DHooks |
-| [胆汁砸队友](<original_plugins/胆汁砸队友/>) | night / 1.0.0 | 胆汁瓶爆炸时使附近队友受到胆汁效果 | 无 | Left 4 DHooks |
-| [动态调整子弹上限](<original_plugins/动态调整子弹上限（协同specialspawner插件）/>) | morzlee、night / 1.1.0 | 根据特感数量动态调整备弹上限 | `!da_status`、`!da_recalc` | `specialspawner` |
-| [根据路程动态减难](<original_plugins/根据路程动态减难插件/>) | night / 1.2.0 | 根据团灭次数和路程投票开启止痛药、路程复活和复活药品 | `!fd`、`!flowassist_status`、`!flowassist_reset` | Left 4 DHooks、`l4d2_nativevote` |
-| [满槽稳定多特感](<original_plugins/满槽稳定多特感插件/>) | Tordecybombo、breezy、night / 1.3.10-night | 满槽时停止无效特感创建，并在槽位释放后恢复补刷 | `!weight`、`!limit`、`!timer`、`!resetspawn`、`!forcetimer` | Left 4 DHooks；不能与原版同时加载 |
-| [多特经验分](<original_plugins/服务器经验分插件/>) | night / 1.10.6 | 计算回合表现、长期经验分、技巧统计和个人排名 | `!mexp`、`!mexp_round`、`!mexp_weapon`、`!mexp_enable` | 技巧统计需配套相关插件 |
-| [服务器增加难度](<original_plugins/服务器增加难度插件/>) | Visor、A1m、Forgetest、CanadaRox、night / 4.4.0 | 集中控制 Tank、特感、推击、起身和石头等难度选项 | `!tankdiff`、`!tankdifficulty` | Left 4 DHooks、Actions 扩展及 GameData |
-| [开局随机近战](<original_plugins/开局随机生成两把近战/>) | N3wton、night / 1.1.0 | 回合开始时生成一把或两把随机近战武器 | `!melee` | 指令需要管理员权限 |
-| [坦克打铁训练](<original_plugins/坦克打铁训练/>) | night / 1.1.0 | 提供可打物件重置、Bot 控制和训练辅助 | `!tanktraining`、`!hittable`、`!tk` | Left 4 DHooks；默认关闭 |
-| [修改爪击伤害](<original_plugins/修改爪击伤害/>) | night / 1.0.2 | 只调整特感普通爪击及 Charger 普通拳击伤害 | 无 | 不影响控制、撞墙和砸地伤害 |
-| [友伤过高封禁](<original_plugins/友伤过高踢出/>) | night / 1.2.0 | 每关统计站立生还者受到的友伤，达到阈值后临时封禁非管理员 | 无 | 倒地友伤不累计；默认阈值 100，封禁 5 分钟 |
-| [HUD 增加弹量显示](<original_plugins/hud增加显示弹量（基于豆瓣酱插件包）/>) | 豆瓣酱な、sorallll、らくらく安楽死、night / 2.21.31 | 在 HUD 中显示弹药等状态 | `!hud` | 依赖豆瓣酱插件包中的 HUD、模拟及 DHooks 组件 |
+| 插件 | 主要功能 | 作者 / 版本 |
+| --- | --- | --- |
+| [抽象操作通报](<original_plugins/抽象操作通报插件/>) | 通报炸队友、多撞、Witch 责任和高额友伤等操作 | night / 1.1.0 |
+| [胆汁砸队友](<original_plugins/胆汁砸队友/>) | 胆汁瓶爆炸时使附近队友受到胆汁效果 | night / 1.0.0 |
+| [动态调整子弹上限](<original_plugins/动态调整子弹上限（协同specialspawner插件）/>) | 根据特感数量动态调整备弹上限 | morzlee、night / 1.1.0 |
+| [根据路程动态减难](<original_plugins/根据路程动态减难插件/>) | 根据团灭次数和路程投票开启止痛药、路程复活和复活药品 | night / 1.2.0 |
+| [满槽稳定多特感](<original_plugins/满槽稳定多特感插件/>) | 满槽时停止无效特感创建，并在槽位释放后恢复补刷 | Tordecybombo、breezy、night / 1.3.10-night |
+| [多特经验分](<original_plugins/服务器经验分插件/>) | 计算回合表现、长期经验分、技巧统计和个人排名 | night / 1.10.6 |
+| [服务器增加难度](<original_plugins/服务器增加难度插件/>) | 集中控制 Tank、特感、推击、起身和石头等难度选项 | Visor、A1m、Forgetest、CanadaRox、night / 4.4.0 |
+| [开局随机近战](<original_plugins/开局随机生成两把近战/>) | 回合开始时生成一把或两把随机近战武器 | N3wton、night / 1.1.0 |
+| [坦克打铁训练](<original_plugins/坦克打铁训练/>) | 提供可打物件重置、Bot 控制和训练辅助 | night / 1.1.0 |
+| [修改爪击伤害](<original_plugins/修改爪击伤害/>) | 只调整特感普通爪击及 Charger 普通拳击伤害 | night / 1.0.2 |
+| [友伤过高封禁](<original_plugins/友伤过高踢出/>) | 统计站立生还者受到的友伤，达到阈值后临时封禁非管理员 | night / 1.2.0 |
+| [HUD 增加弹量显示](<original_plugins/hud增加显示弹量（基于豆瓣酱插件包）/>) | 在 HUD 中显示弹药等状态 | 豆瓣酱な、sorallll、らくらく安楽死、night / 2.21.31 |
 
 ## 收集插件
 
-| 插件 | 作者 / 版本 | 主要功能 | 游戏内指令 | 依赖或备注 |
-| --- | --- | --- | --- | --- |
-| [过场动画不受伤害](<collected_plugins/过场动画不受伤害/>) | HarryPotter / 1.0 | 过场动画期间保护生还者并阻止特感控制 | 无 | Left 4 DHooks |
-| [VScript 脚本屏蔽](<collected_plugins/脚本屏蔽插件/>) | 洛琪、Forgetest / 1.2 | 屏蔽非当前地图或白名单中的 VScript | 无 | DHooks / DynamicDetour |
-| [禁止速砍](<collected_plugins/禁止速砍/>) | sheo / 2.3 | 修复快速切换武器绕过近战攻击间隔 | 无 | 自动生效 |
-| [命中反馈分支](<collected_plugins/命中反馈分支1.1.5(反馈声音玩家自选)/>) | TsukasaSato、Hesh233 / 1.1.5+ | 提供可由玩家选择的击中与击杀反馈 | `!snd` | 自定义素材不会自动分发给玩家端 |
-| [舌头拖拽伤害](<collected_plugins/舌头拖拽伤害/>) | Silvers / 未注明 | Smoker 拖拽生还者时持续造成伤害 | 无 | 当前仅保存编译文件 |
-| [刷特感控制菜单](<collected_plugins/刷特感插件控制插件/>) | らくらく安楽死、night / 3.0 | 通过投票控制多特开关、数量和刷新间隔 | `!x` | `l4d2_nativevote`、`specialspawner_fullslots` |
-| [针药缓慢回血](<collected_plugins/药改为缓慢回血(可在源码内调整回复量和速度)/>) | ProdigySim、CircleSquared、Forgetest / 2.4 | 将止痛药和肾上腺素改为分段恢复 | 无 | Left 4 DHooks；功能默认关闭 |
-| [脏话和谐](<collected_plugins/脏话和谐插件/>) | Seiunsky Maomao / 1.1 | 按规则替换聊天中的指定词语或整句内容 | `!bszh_reload` | 规则保存在 SourceMod 数据目录 |
-| [All4Dead 2](<collected_plugins/all4dead/>) | grandwazir、HarryPotter / 未注明 | 通过管理菜单控制导演并生成实体 | `!admin` | 需要管理员权限及配套 GameData |
-| [Jockey 空爆](<collected_plugins/Jockey空爆/>) | Visor、A1m\`、night / 1.5-night | 霰弹枪在 Jockey 飞扑途中造成足够伤害时将其空爆 | 无 | 默认伤害门槛 195 |
-| [附加手电筒](<collected_plugins/l4d_flashlight/>) | SilverShot / 2.34 | 提供可自定义颜色的附加手电筒 | `!light`、`!lightmenu`、`!lightbow` | 当前配置仅允许死亡生还者使用个人手电 |
-| [Hunter 飞扑伤害](<collected_plugins/l4d2_pounce_damage/>) | SilverShot / 1.1d | 让远距离飞扑奖励伤害在所有模式生效 | 无 | 需要配套 GameData |
-| [L4D2 Vomit Fix](<collected_plugins/l4d2_vomit_fix-master/>) | lakwsh / 1.1.1、1.0.2 | 修复非 30 Tick 下的喷吐距离，并附带可选 A2S 修复 | 无 | 两个插件均需配套 GameData |
-| [Little Anti-Cheat](<collected_plugins/Little-Anti-Cheat-1.7.4_3/>) | J_Tanzanite / 1.7.4 | 检测瞄准、连跳、宏、非法 CVar 等作弊或滥用行为 | 无 | 启用前应检查处罚配置 |
-| [R 键给药](<collected_plugins/r键给药/>) | CanadaRox、A1m\`、Forgetest / 1.6.2 | 手持针药时按 `R` 键递给瞄准的队友 | 无 | 可选配合延迟补偿插件 |
+| 插件 | 主要功能 | 作者 / 版本 |
+| --- | --- | --- |
+| [过场动画不受伤害](<collected_plugins/过场动画不受伤害/>) | 过场动画期间保护生还者并阻止特感控制 | HarryPotter / 1.0 |
+| [VScript 脚本屏蔽](<collected_plugins/脚本屏蔽插件/>) | 屏蔽非当前地图或白名单中的 VScript | 洛琪、Forgetest / 1.2 |
+| [禁止速砍](<collected_plugins/禁止速砍/>) | 修复快速切换武器绕过近战攻击间隔 | sheo / 2.3 |
+| [命中反馈分支](<collected_plugins/命中反馈分支1.1.5(反馈声音玩家自选)/>) | 提供可由玩家选择的击中与击杀反馈 | TsukasaSato、Hesh233 / 1.1.5+ |
+| [舌头拖拽伤害](<collected_plugins/舌头拖拽伤害/>) | Smoker 拖拽生还者时持续造成伤害 | Silvers / 未注明 |
+| [刷特感控制菜单](<collected_plugins/刷特感插件控制插件/>) | 通过投票控制多特开关、数量和刷新间隔 | らくらく安楽死、night / 3.0 |
+| [针药缓慢回血](<collected_plugins/药改为缓慢回血(可在源码内调整回复量和速度)/>) | 将止痛药和肾上腺素改为分段恢复 | ProdigySim、CircleSquared、Forgetest / 2.4 |
+| [脏话和谐](<collected_plugins/脏话和谐插件/>) | 按规则替换聊天中的指定词语或整句内容 | Seiunsky Maomao / 1.1 |
+| [All4Dead 2](<collected_plugins/all4dead/>) | 通过管理菜单控制导演并生成实体 | grandwazir、HarryPotter / 未注明 |
+| [Jockey 空爆](<collected_plugins/Jockey空爆/>) | 霰弹枪在 Jockey 飞扑途中造成足够伤害时将其空爆 | Visor、A1m\`、night / 1.5-night |
+| [附加手电筒](<collected_plugins/l4d_flashlight/>) | 提供可自定义颜色的附加手电筒 | SilverShot / 2.34 |
+| [Hunter 飞扑伤害](<collected_plugins/l4d2_pounce_damage/>) | 让远距离飞扑奖励伤害在所有模式生效 | SilverShot / 1.1d |
+| [L4D2 Vomit Fix](<collected_plugins/l4d2_vomit_fix-master/>) | 修复非 30 Tick 下的喷吐距离，并附带可选 A2S 修复 | lakwsh / 1.1.1、1.0.2 |
+| [Little Anti-Cheat](<collected_plugins/Little-Anti-Cheat-1.7.4_3/>) | 检测瞄准、连跳、宏、非法 CVar 等作弊或滥用行为 | J_Tanzanite / 1.7.4 |
+| [R 键给药](<collected_plugins/r键给药/>) | 手持针药时按 `R` 键递给瞄准的队友 | CanadaRox、A1m\`、Forgetest / 1.6.2 |
+
+## 常用指令速查
+
+| 插件 | 常用指令 |
+| --- | --- |
+| [动态调整子弹上限](<original_plugins/动态调整子弹上限（协同specialspawner插件）/>) | `!da_status`、`!da_recalc` |
+| [根据路程动态减难](<original_plugins/根据路程动态减难插件/>) | `!fd`、`!flowassist_reset` |
+| [满槽稳定多特感](<original_plugins/满槽稳定多特感插件/>) | `!weight`、`!limit`、`!timer`、`!resetspawn`、`!forcetimer` |
+| [多特经验分](<original_plugins/服务器经验分插件/>) | `!mx`、`!mr`、`!mra`、`!mw`、`!mxe` |
+| [服务器增加难度](<original_plugins/服务器增加难度插件/>) | `!tankdiff` |
+| [开局随机近战](<original_plugins/开局随机生成两把近战/>) | `!melee` |
+| [坦克打铁训练](<original_plugins/坦克打铁训练/>) | `!tanktraining`、`!hittable`、`!tk` |
+| [HUD 增加弹量显示](<original_plugins/hud增加显示弹量（基于豆瓣酱插件包）/>) | `!hud` |
+| [命中反馈分支](<collected_plugins/命中反馈分支1.1.5(反馈声音玩家自选)/>) | `!snd` |
+| [刷特感控制菜单](<collected_plugins/刷特感插件控制插件/>) | `!x` |
+| [脏话和谐](<collected_plugins/脏话和谐插件/>) | `!bszh_reload` |
+| [All4Dead 2](<collected_plugins/all4dead/>) | `!admin` |
+| [附加手电筒](<collected_plugins/l4d_flashlight/>) | `!light`、`!lightmenu`、`!lightbow` |
 
 ## 说明
 
