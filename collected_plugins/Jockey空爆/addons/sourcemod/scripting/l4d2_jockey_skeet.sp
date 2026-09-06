@@ -23,18 +23,21 @@ bool
 	reportJockeySkeets,
 	lateLoad;
 
+Handle g_hForwardJockeySkeet;
+
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max)
 {
 	lateLoad = late;
+	g_hForwardJockeySkeet = CreateGlobalForward("OnJockeySkeet", ET_Ignore, Param_Cell, Param_Cell);
 	return APLRes_Success;
 }
 
 public Plugin myinfo = 
 {
 	name = "L4D2 Jockey Skeet",
-	author = "Visor, A1m`",
+	author = "Visor, A1m`, night",
 	description = "A dream come true",
-	version = "1.4",
+	version = "1.5-night",
 	url = "https://github.com/SirPlease/L4D2-Competitive-Rework"
 };
 
@@ -94,6 +97,11 @@ Action OnTakeDamage(int victim, int &attacker, int &inflictor, float &damage, in
 					}
 				}
 			}
+
+			Call_StartForward(g_hForwardJockeySkeet);
+			Call_PushCell(attacker);
+			Call_PushCell(victim);
+			Call_Finish();
 			
 			damage = jockeyHealth;
 			return Plugin_Changed;

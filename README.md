@@ -14,9 +14,9 @@
 | [抽象操作通报](<original_plugins/抽象操作通报插件/>) | night / 1.1.0 | 通报炸队友、多撞、Witch 责任和高额友伤等操作 | 无 | Left 4 DHooks |
 | [胆汁砸队友](<original_plugins/胆汁砸队友/>) | night / 1.0.0 | 胆汁瓶爆炸时使附近队友受到胆汁效果 | 无 | Left 4 DHooks |
 | [动态调整子弹上限](<original_plugins/动态调整子弹上限（协同specialspawner插件）/>) | morzlee、night / 1.1.0 | 根据特感数量动态调整备弹上限 | `!da_status`、`!da_recalc` | `specialspawner` |
-| [根据路程动态减难](<original_plugins/根据路程动态减难插件/>) | night / 1.0.0 | 根据团灭次数和路程投票开启止痛药与路程复活 | `!flowassist_status`、`!flowassist_reset` | Left 4 DHooks、`l4d2_nativevote` |
-| [满槽稳定多特感](<original_plugins/满槽稳定多特感插件/>) | Tordecybombo、breezy、night / 1.3.8-night | 满槽时停止无效特感创建，并在槽位释放后恢复补刷 | `!weight`、`!limit`、`!timer`、`!resetspawn`、`!forcetimer` | Left 4 DHooks；不能与原版同时加载 |
-| [多特经验分](<original_plugins/服务器经验分插件/>) | night / 1.7.4 | 计算回合表现、长期经验分和个人排名 | `!mexp`、`!mexp_round`、`!mexp_weapon`、`!mexp_enable` | 技巧分可配合 `l4d2_skill_detect` |
+| [根据路程动态减难](<original_plugins/根据路程动态减难插件/>) | night / 1.2.0 | 根据团灭次数和路程投票开启止痛药、路程复活和复活药品 | `!fd`、`!flowassist_status`、`!flowassist_reset` | Left 4 DHooks、`l4d2_nativevote` |
+| [满槽稳定多特感](<original_plugins/满槽稳定多特感插件/>) | Tordecybombo、breezy、night / 1.3.10-night | 满槽时停止无效特感创建，并在槽位释放后恢复补刷 | `!weight`、`!limit`、`!timer`、`!resetspawn`、`!forcetimer` | Left 4 DHooks；不能与原版同时加载 |
+| [多特经验分](<original_plugins/服务器经验分插件/>) | night / 1.10.6 | 计算回合表现、长期经验分、技巧统计和个人排名 | `!mexp`、`!mexp_round`、`!mexp_weapon`、`!mexp_enable` | 技巧统计需配套相关插件 |
 | [服务器增加难度](<original_plugins/服务器增加难度插件/>) | Visor、A1m、Forgetest、CanadaRox、night / 4.4.0 | 集中控制 Tank、特感、推击、起身和石头等难度选项 | `!tankdiff`、`!tankdifficulty` | Left 4 DHooks、Actions 扩展及 GameData |
 | [开局随机近战](<original_plugins/开局随机生成两把近战/>) | N3wton、night / 1.1.0 | 回合开始时生成一把或两把随机近战武器 | `!melee` | 指令需要管理员权限 |
 | [坦克打铁训练](<original_plugins/坦克打铁训练/>) | night / 1.1.0 | 提供可打物件重置、Bot 控制和训练辅助 | `!tanktraining`、`!hittable`、`!tk` | Left 4 DHooks；默认关闭 |
@@ -33,11 +33,11 @@
 | [禁止速砍](<collected_plugins/禁止速砍/>) | sheo / 2.3 | 修复快速切换武器绕过近战攻击间隔 | 无 | 自动生效 |
 | [命中反馈分支](<collected_plugins/命中反馈分支1.1.5(反馈声音玩家自选)/>) | TsukasaSato、Hesh233 / 1.1.5+ | 提供可由玩家选择的击中与击杀反馈 | `!snd` | 自定义素材不会自动分发给玩家端 |
 | [舌头拖拽伤害](<collected_plugins/舌头拖拽伤害/>) | Silvers / 未注明 | Smoker 拖拽生还者时持续造成伤害 | 无 | 当前仅保存编译文件 |
-| [刷特感控制菜单](<collected_plugins/刷特感插件控制插件/>) | らくらく安楽死、Assistant / 2.9 | 通过投票控制多特开关、数量和刷新间隔 | `!x` | `l4d2_nativevote`、`specialspawner` |
+| [刷特感控制菜单](<collected_plugins/刷特感插件控制插件/>) | らくらく安楽死、night / 3.0 | 通过投票控制多特开关、数量和刷新间隔 | `!x` | `l4d2_nativevote`、`specialspawner_fullslots` |
 | [针药缓慢回血](<collected_plugins/药改为缓慢回血(可在源码内调整回复量和速度)/>) | ProdigySim、CircleSquared、Forgetest / 2.4 | 将止痛药和肾上腺素改为分段恢复 | 无 | Left 4 DHooks；功能默认关闭 |
 | [脏话和谐](<collected_plugins/脏话和谐插件/>) | Seiunsky Maomao / 1.1 | 按规则替换聊天中的指定词语或整句内容 | `!bszh_reload` | 规则保存在 SourceMod 数据目录 |
 | [All4Dead 2](<collected_plugins/all4dead/>) | grandwazir、HarryPotter / 未注明 | 通过管理菜单控制导演并生成实体 | `!admin` | 需要管理员权限及配套 GameData |
-| [Jockey 空爆](<collected_plugins/Jockey空爆/>) | Visor、A1m\` / 1.4 | 霰弹枪在 Jockey 飞扑途中造成足够伤害时将其空爆 | 无 | 默认伤害门槛 195 |
+| [Jockey 空爆](<collected_plugins/Jockey空爆/>) | Visor、A1m\`、night / 1.5-night | 霰弹枪在 Jockey 飞扑途中造成足够伤害时将其空爆 | 无 | 默认伤害门槛 195 |
 | [附加手电筒](<collected_plugins/l4d_flashlight/>) | SilverShot / 2.34 | 提供可自定义颜色的附加手电筒 | `!light`、`!lightmenu`、`!lightbow` | 当前配置仅允许死亡生还者使用个人手电 |
 | [Hunter 飞扑伤害](<collected_plugins/l4d2_pounce_damage/>) | SilverShot / 1.1d | 让远距离飞扑奖励伤害在所有模式生效 | 无 | 需要配套 GameData |
 | [L4D2 Vomit Fix](<collected_plugins/l4d2_vomit_fix-master/>) | lakwsh / 1.1.1、1.0.2 | 修复非 30 Tick 下的喷吐距离，并附带可选 A2S 修复 | 无 | 两个插件均需配套 GameData |

@@ -3,17 +3,27 @@
 #include <sourcemod>
 #include <l4d2_nativevote>
 
+#define MULTISI_PLUGIN_PRIMARY_FILE "specialspawner_fullslots.smx"
+#define MULTISI_PLUGIN_PRIMARY_NAME "specialspawner_fullslots"
+#define MULTISI_PLUGIN_LEGACY_FILE "specialspawner.smx"
+#define MULTISI_PLUGIN_LEGACY_NAME "specialspawner"
+
 public Plugin myinfo = {
     name = "L4D2 Multi-Function X Menu",
-    author = "らくらく安楽死 & Assistant",
+    author = "らくらく安楽死 & night",
     description = "多功能控制菜单 (!x)",
-    version = "2.9",
+    version = "3.0",
 };
 
-bool g_bMultiSI_Enabled = false; 
-int g_iCurrentLimit = 0;        
-int g_iCurrentTime = 0;        
-int g_iExtraLimit = 0;
+bool g_bMultiSI_Enabled = false;
+int g_iCurrentLimit = 0;
+int g_iCurrentSpawnSize = 0;
+int g_iCurrentSILimit = 0;
+int g_iCurrentTime = 0;
+float g_fCurrentTimeMin = 0.0;
+float g_fCurrentTimeMax = 0.0;
+float g_fExtraLimit = 0.0;
+float g_fExtraSize = 1.0;
 
 bool g_bHasVotedToggle = false;
 bool g_bSavedToggleState = false;
@@ -36,10 +46,8 @@ public void OnConfigsExecuted() {
 
 public Action Timer_EnforceOverrides(Handle timer) {
     if (g_bHasVotedToggle) {
-        if (g_bSavedToggleState) {
-            ServerCommand("sm plugins load specialspawner");
-        } else {
-            ServerCommand("sm plugins unload specialspawner");
+        SetMultiSIPluginState(g_bSavedToggleState);
+        if (!g_bSavedToggleState) {
             return Plugin_Continue; 
         }
     }
@@ -49,7 +57,8 @@ public Action Timer_EnforceOverrides(Handle timer) {
 }
 
 public Action Timer_EnforceCvars(Handle timer) {
-    if (CommandExists("sm_resetspawn")) {
+    UpdateCurrentState();
+    if (g_bMultiSI_Enabled) {
         if (g_bHasVotedLimit) {
             ServerCommand("sm_cvar ss_base_limit %d", g_iSavedLimit);
             ServerCommand("sm_cvar ss_base_size %d", g_iSavedLimit);
@@ -58,6 +67,8 @@ public Action Timer_EnforceCvars(Handle timer) {
             ServerCommand("sm_cvar ss_time_min %d", g_iSavedTime);
             ServerCommand("sm_cvar ss_time_max %d", g_iSavedTime + 1);
         }
+        ServerExecute();
+        ApplyPopulationScaling(false);
     }
     return Plugin_Continue;
 }
@@ -73,24 +84,77 @@ public Action Timer_WelcomeAnnounce(Handle timer, any userid) {
     if (client && IsClientInGame(client)) {
         UpdateCurrentState();
         if (g_bMultiSI_Enabled) {
-            PrintToChat(client, "\x04[系统]\x01 当前的多特配置为\x05%d\x01秒\x05%d\x01特，4人以上每多1人额外增加\x05%d\x01特，输入 \x03!x\x01 更改多特配置", g_iCurrentTime, g_iCurrentLimit, g_iExtraLimit);
+            PrintCurrentState(client);
         }
     }
     return Plugin_Continue;
 }
 
 void UpdateCurrentState() {
-    g_bMultiSI_Enabled = CommandExists("sm_resetspawn");
+    g_bMultiSI_Enabled = IsMultiSIPluginRunning();
 
     if (g_bMultiSI_Enabled) {
-        ConVar cvLimit = FindConVar("ss_base_limit");
-        ConVar cvTime = FindConVar("ss_time_min");
-        ConVar cvExtra = FindConVar("ss_extra_limit");
-        
-        if (cvLimit != null) g_iCurrentLimit = cvLimit.IntValue;
-        if (cvTime != null) g_iCurrentTime = cvTime.IntValue;
-        if (cvExtra != null) g_iExtraLimit = cvExtra.IntValue;
+        ConVar cvBaseLimit = FindConVar("ss_base_limit");
+        ConVar cvSpawnSize = FindConVar("ss_spawn_size");
+        ConVar cvSILimit = FindConVar("ss_si_limit");
+        ConVar cvTimeMin = FindConVar("ss_time_min");
+        ConVar cvTimeMax = FindConVar("ss_time_max");
+        ConVar cvExtraLimit = FindConVar("ss_extra_limit");
+        ConVar cvExtraSize = FindConVar("ss_extra_size");
+
+        if (cvBaseLimit != null) g_iCurrentLimit = cvBaseLimit.IntValue;
+        if (cvSpawnSize != null) g_iCurrentSpawnSize = cvSpawnSize.IntValue;
+        if (cvSILimit != null) g_iCurrentSILimit = cvSILimit.IntValue;
+        if (cvTimeMin != null) {
+            g_fCurrentTimeMin = cvTimeMin.FloatValue;
+            g_iCurrentTime = RoundToNearest(g_fCurrentTimeMin);
+        }
+        if (cvTimeMax != null) g_fCurrentTimeMax = cvTimeMax.FloatValue;
+        if (cvExtraLimit != null) g_fExtraLimit = cvExtraLimit.FloatValue;
+        if (cvExtraSize != null) g_fExtraSize = cvExtraSize.FloatValue;
     }
+}
+
+bool IsMultiSIPluginRunning() {
+    return IsPluginFileRunning(MULTISI_PLUGIN_PRIMARY_FILE) || IsPluginFileRunning(MULTISI_PLUGIN_LEGACY_FILE);
+}
+
+bool IsPluginFileRunning(const char[] filename) {
+    Handle plugin = FindPluginByFile(filename);
+    return plugin != null && GetPluginStatus(plugin) == Plugin_Running;
+}
+
+bool IsPluginFileLoaded(const char[] filename) {
+    return FindPluginByFile(filename) != null;
+}
+
+void SetMultiSIPluginState(bool enabled) {
+    if (enabled) {
+        if (!IsMultiSIPluginRunning()) {
+            ServerCommand("sm plugins load %s", MULTISI_PLUGIN_PRIMARY_NAME);
+        }
+    } else {
+        if (IsPluginFileLoaded(MULTISI_PLUGIN_PRIMARY_FILE)) {
+            ServerCommand("sm plugins unload %s", MULTISI_PLUGIN_PRIMARY_NAME);
+        }
+        if (IsPluginFileLoaded(MULTISI_PLUGIN_LEGACY_FILE)) {
+            ServerCommand("sm plugins unload %s", MULTISI_PLUGIN_LEGACY_NAME);
+        }
+    }
+    ServerExecute();
+    UpdateCurrentState();
+}
+
+void PrintCurrentState(int client) {
+    PrintToChat(client,
+        "\x04[系统]\x01 当前多特：每批\x05%d\x01特，场上上限\x05%d\x01特，刷新\x05%.1f~%.1f\x01秒；输入 \x03!x\x01 更改配置",
+        g_iCurrentSpawnSize, g_iCurrentSILimit, g_fCurrentTimeMin, g_fCurrentTimeMax);
+}
+
+void PrintCurrentStateAll() {
+    PrintToChatAll(
+        "\x04[系统]\x01 当前多特：每批\x05%d\x01特，场上上限\x05%d\x01特，刷新\x05%.1f~%.1f\x01秒；输入 \x03!x\x01 更改配置",
+        g_iCurrentSpawnSize, g_iCurrentSILimit, g_fCurrentTimeMin, g_fCurrentTimeMax);
 }
 
 public Action Command_XMenu(int client, int args) {
@@ -124,7 +188,13 @@ void ShowMenu_Level2_SI(int client) {
     UpdateCurrentState(); 
     
     Menu menu = new Menu(MenuHandler_Level2_SI);
-    menu.SetTitle("★ 特感配置 ★\n-------------------");
+    if (g_bMultiSI_Enabled) {
+        menu.SetTitle("★ 特感配置 ★\n当前：%d特/次，上限%d特，%.1f~%.1f秒\n动态：每多1人上限+%.1f，每%.1f人每批+1\n-------------------",
+            g_iCurrentSpawnSize, g_iCurrentSILimit, g_fCurrentTimeMin, g_fCurrentTimeMax,
+            g_fExtraLimit, g_fExtraSize);
+    } else {
+        menu.SetTitle("★ 特感配置 ★\n当前：多特已关闭\n-------------------");
+    }
     menu.AddItem("toggle", "开关多特");
     
     if (g_bMultiSI_Enabled) {
@@ -157,7 +227,7 @@ public int MenuHandler_Level2_SI(Menu menu, MenuAction action, int param1, int p
 void ShowMenu_Level3_Toggle(int client) {
     UpdateCurrentState(); 
     Menu menu = new Menu(MenuHandler_Level3_Toggle);
-    menu.SetTitle("★ 开关多特 ★\n-------------------");
+    menu.SetTitle("★ 开关多特 ★\n当前：%s\n-------------------", g_bMultiSI_Enabled ? "已开启" : "已关闭");
     
     char item1[64], item2[64];
     Format(item1, sizeof(item1), "[%s] 开启多特", g_bMultiSI_Enabled ? "✓" : "  ");
@@ -315,11 +385,22 @@ void ExecuteXAction(const char[] sInfo) {
         g_bHasVotedToggle = true; 
         if (strcmp(sData[1], "on") == 0) {
             g_bSavedToggleState = true;
-            ServerCommand("sm plugins load specialspawner");
+            SetMultiSIPluginState(true);
+            if (!g_bMultiSI_Enabled) {
+                g_bHasVotedToggle = false;
+                PrintToChatAll("\x04[系统]\x01 多特插件加载失败，请管理员检查 \x05%s\x01。", MULTISI_PLUGIN_PRIMARY_FILE);
+                return;
+            }
+            CreateTimer(0.5, Timer_EnforceCvars, _, TIMER_FLAG_NO_MAPCHANGE);
+            CreateTimer(0.8, Timer_BroadcastState_All, _, TIMER_FLAG_NO_MAPCHANGE);
         } else {
             g_bSavedToggleState = false;
-            ServerCommand("sm plugins unload specialspawner");
-            PrintToChatAll("\x04[系统]\x01 多特模式已关闭，交还系统导演控制。");
+            SetMultiSIPluginState(false);
+            if (!g_bMultiSI_Enabled) {
+                PrintToChatAll("\x04[系统]\x01 多特模式已关闭，交还系统导演控制。");
+            } else {
+                PrintToChatAll("\x04[系统]\x01 多特插件卸载失败，请管理员检查插件状态。");
+            }
             return; 
         }
     }
@@ -330,31 +411,8 @@ void ExecuteXAction(const char[] sInfo) {
         
         ServerCommand("sm_cvar ss_base_limit %d", limit);
         ServerCommand("sm_cvar ss_base_size %d", limit);
-        
-        int extra_limit = 1, extra_size = 1;
-        ConVar cvEL = FindConVar("ss_extra_limit");
-        ConVar cvES = FindConVar("ss_extra_size");
-        if (cvEL != null) extra_limit = cvEL.IntValue;
-        if (cvES != null) extra_size = cvES.IntValue;
-        
-        int survivors = 0;
-        for (int i = 1; i <= MaxClients; i++) {
-            if (IsClientInGame(i) && GetClientTeam(i) == 2) {
-                survivors++;
-            }
-        }
-        
-        int final_limit = limit;
-        int final_size = limit;
-        if (survivors > 4) {
-            final_limit += (survivors - 4) * extra_limit;
-            final_size += (survivors - 4) * extra_size;
-        }
-        
-        ServerCommand("sm_cvar ss_si_limit %d", final_limit);
-        ServerCommand("sm_cvar ss_spawn_size %d", final_size);
-        
-        ServerCommand("sm_resetspawn");
+        ServerExecute();
+        ApplyPopulationScaling(true);
     }
     else if (strcmp(sData[0], "time") == 0) {
         g_bHasVotedTime = true; 
@@ -364,15 +422,69 @@ void ExecuteXAction(const char[] sInfo) {
         ServerCommand("sm_cvar ss_time_min %d", time);
         ServerCommand("sm_cvar ss_time_max %d", time + 1);
         ServerCommand("sm_resetspawn");
+        ServerExecute();
     }
 
-    CreateTimer(0.3, Timer_BroadcastState_All);
+    if (strcmp(sData[0], "toggle") != 0) {
+        CreateTimer(0.3, Timer_BroadcastState_All, _, TIMER_FLAG_NO_MAPCHANGE);
+    }
+}
+
+void ApplyPopulationScaling(bool resetSpawn) {
+    if (!IsMultiSIPluginRunning()) {
+        return;
+    }
+
+    ConVar cvBaseLimit = FindConVar("ss_base_limit");
+    ConVar cvExtraLimit = FindConVar("ss_extra_limit");
+    ConVar cvBaseSize = FindConVar("ss_base_size");
+    ConVar cvExtraSize = FindConVar("ss_extra_size");
+    ConVar cvSILimit = FindConVar("ss_si_limit");
+    ConVar cvSpawnSize = FindConVar("ss_spawn_size");
+    if (cvBaseLimit == null || cvExtraLimit == null || cvBaseSize == null || cvExtraSize == null
+        || cvSILimit == null || cvSpawnSize == null) {
+        return;
+    }
+
+    int survivors = 0;
+    for (int i = 1; i <= MaxClients; i++) {
+        if (IsClientInGame(i) && GetClientTeam(i) == 2) {
+            survivors++;
+        }
+    }
+
+    int extraPlayers = survivors - 4;
+    if (extraPlayers < 0) {
+        extraPlayers = 0;
+    }
+
+    float extraSize = cvExtraSize.FloatValue;
+    if (extraSize < 1.0) {
+        extraSize = 1.0;
+    }
+
+    int finalLimit = cvBaseLimit.IntValue + RoundToNearest(cvExtraLimit.FloatValue * float(extraPlayers));
+    int finalSize = cvBaseSize.IntValue + RoundToNearest(float(extraPlayers) / extraSize);
+    if (finalLimit < 1) finalLimit = 1;
+    if (finalLimit > 32) finalLimit = 32;
+    if (finalSize < 1) finalSize = 1;
+    if (finalSize > 32) finalSize = 32;
+
+    cvSILimit.IntValue = finalLimit;
+    cvSpawnSize.IntValue = finalSize;
+
+    if (resetSpawn && CommandExists("sm_resetspawn")) {
+        ServerCommand("sm_resetspawn");
+        ServerExecute();
+    }
+
+    UpdateCurrentState();
 }
 
 public Action Timer_BroadcastState_All(Handle timer) {
     UpdateCurrentState();
     if (g_bMultiSI_Enabled) {
-        PrintToChatAll("\x04[系统]\x01 当前的多特配置为\x05%d\x01秒\x05%d\x01特，4人以上每多1人额外增加\x05%d\x01特，输入 \x03!x\x01 更改多特配置", g_iCurrentTime, g_iCurrentLimit, g_iExtraLimit);
+        PrintCurrentStateAll();
     }
     return Plugin_Continue;
 }

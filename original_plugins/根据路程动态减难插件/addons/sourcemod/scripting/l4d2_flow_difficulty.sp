@@ -6,16 +6,17 @@
 #include <left4dhooks>
 #include <l4d2_nativevote>
 
-#define PLUGIN_VERSION "1.0.0"
+#define PLUGIN_VERSION "1.2.0"
 #define SAMPLE_COUNT 5
 #define TEAM_SURVIVOR 2
-#define VOTE_RETRY_LIMIT 30
+#define SETUP_RETRY_LOG_INTERVAL 30
 
 enum AssistVote
 {
 	AssistVote_None = 0,
 	AssistVote_Tier1,
-	AssistVote_Tier2
+	AssistVote_Tier2,
+	AssistVote_Tier3
 };
 
 public Plugin myinfo =
@@ -31,6 +32,9 @@ ConVar g_cvEnable;
 ConVar g_cvEarlyPercent;
 ConVar g_cvTier1Wipes;
 ConVar g_cvTier2Wipes;
+ConVar g_cvTier3Wipes;
+ConVar g_cvFallbackInvalidWipes;
+ConVar g_cvFallbackTier1Wipes;
 ConVar g_cvVoteTime;
 ConVar g_cvReviveHealth;
 
@@ -42,13 +46,17 @@ bool g_bMissionLostHandled;
 bool g_bAttemptFlowValid;
 bool g_bTier1Enabled;
 bool g_bTier2Enabled;
+bool g_bTier3Enabled;
 bool g_bTier1VotePending;
 bool g_bTier2VotePending;
+bool g_bTier3VotePending;
 bool g_bPillsPending;
 bool g_bTier2TargetValid;
 bool g_bTier2Triggered;
 bool g_bMapFlowDisabled;
+bool g_bFlowFallbackActive;
 bool g_bVoteClientVoted[MAXPLAYERS + 1];
+bool g_bRecentWipeValid[SAMPLE_COUNT];
 
 int g_iRoundSerial;
 int g_iSetupRetries;
@@ -56,13 +64,20 @@ int g_iTotalWipes;
 int g_iEarlyWipes;
 int g_iWipeSampleCount;
 int g_iWipeSampleNext;
+int g_iRecentWipeCount;
+int g_iRecentWipeNext;
+int g_iConsecutiveInvalidWipes;
 int g_iExpectedVoters;
 int g_iReceivedVotes;
 
 float g_fAttemptMaxPercent;
 float g_fWipeSamples[SAMPLE_COUNT];
+float g_fRecentWipePercents[SAMPLE_COUNT];
 float g_fTier2Target;
 float g_fMapMaxFlowOverride;
+
+char g_sLastWipeReason[96];
+char g_sLastResetReason[64];
 
 AssistVote g_eActiveVote = AssistVote_None;
 
@@ -109,6 +124,34 @@ public void OnPluginStart()
 		true,
 		1.0
 	);
+	g_cvTier3Wipes = CreateConVar(
+		"l4d2_flow_difficulty_tier3_wipes",
+		"10",
+		"触发第三阶随机药品投票所需的总团灭次数。",
+		FCVAR_NOTIFY,
+		true,
+		1.0
+	);
+	g_cvFallbackInvalidWipes = CreateConVar(
+		"l4d2_flow_difficulty_fallback_invalid_wipes",
+		"3",
+		"连续多少次团灭无法取得路程后，启用导航备用模式。",
+		FCVAR_NOTIFY,
+		true,
+		1.0,
+		true,
+		20.0
+	);
+	g_cvFallbackTier1Wipes = CreateConVar(
+		"l4d2_flow_difficulty_fallback_tier1_wipes",
+		"4",
+		"导航备用模式下触发第一阶投票所需的总团灭次数。",
+		FCVAR_NOTIFY,
+		true,
+		1.0,
+		true,
+		100.0
+	);
 	g_cvVoteTime = CreateConVar(
 		"l4d2_flow_difficulty_vote_time",
 		"25",
@@ -138,6 +181,7 @@ public void OnPluginStart()
 	);
 
 	RegAdminCmd("sm_flowassist_status", Command_Status, ADMFLAG_GENERIC, "查看动态减难状态。");
+	RegAdminCmd("sm_fd", Command_Status, ADMFLAG_GENERIC, "查看动态减难状态（简写）。");
 	RegAdminCmd("sm_flowassist_reset", Command_Reset, ADMFLAG_ROOT, "清空当前章节的动态减难状态。");
 
 	HookEvent("round_start", Event_RoundStart, EventHookMode_PostNoCopy);
@@ -149,7 +193,7 @@ public void OnPluginStart()
 
 public void OnMapStart()
 {
-	ResetChapterState();
+	ResetChapterState("地图开始或切换");
 	g_bMapFlowDisabled = false;
 	g_fMapMaxFlowOverride = 0.0;
 
@@ -171,31 +215,41 @@ public void OnConfigsExecuted()
 	LoadMapFlowConfig();
 }
 
-void ResetChapterState()
+void ResetChapterState(const char[] reason)
 {
 	g_bRoundActive = false;
 	g_bMissionLostHandled = false;
 	g_bAttemptFlowValid = false;
 	g_bTier1Enabled = false;
 	g_bTier2Enabled = false;
+	g_bTier3Enabled = false;
 	g_bTier1VotePending = false;
 	g_bTier2VotePending = false;
+	g_bTier3VotePending = false;
 	g_bPillsPending = false;
 	g_bTier2TargetValid = false;
 	g_bTier2Triggered = false;
+	g_bFlowFallbackActive = false;
 	g_iTotalWipes = 0;
 	g_iEarlyWipes = 0;
 	g_iWipeSampleCount = 0;
 	g_iWipeSampleNext = 0;
+	g_iRecentWipeCount = 0;
+	g_iRecentWipeNext = 0;
+	g_iConsecutiveInvalidWipes = 0;
 	g_iExpectedVoters = 0;
 	g_iReceivedVotes = 0;
 	g_fAttemptMaxPercent = 0.0;
 	g_fTier2Target = 0.0;
 	g_eActiveVote = AssistVote_None;
+	strcopy(g_sLastWipeReason, sizeof(g_sLastWipeReason), "尚无团灭记录");
+	strcopy(g_sLastResetReason, sizeof(g_sLastResetReason), reason);
 
 	for (int i = 0; i < SAMPLE_COUNT; i++)
 	{
 		g_fWipeSamples[i] = 0.0;
+		g_fRecentWipePercents[i] = 0.0;
+		g_bRecentWipeValid[i] = false;
 	}
 	for (int client = 1; client <= MaxClients; client++)
 	{
@@ -220,7 +274,7 @@ public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
 	g_bAttemptFlowValid = false;
 	g_bTier2Triggered = false;
 	g_fAttemptMaxPercent = 0.0;
-	g_bTier2TargetValid = g_bTier2Enabled && CalculateWipeAverage(g_fTier2Target);
+	g_bTier2TargetValid = g_bTier2Enabled && !g_bFlowFallbackActive && CalculateWipeAverage(g_fTier2Target);
 
 	delete g_hRoundSetupTimer;
 	g_hRoundSetupTimer = CreateTimer(
@@ -239,21 +293,69 @@ public void Event_MissionLost(Event event, const char[] name, bool dontBroadcast
 	}
 
 	g_bMissionLostHandled = true;
+	float finalPercent;
+	UpdateAttemptFlowSample(finalPercent);
 	g_bRoundActive = false;
 	g_iTotalWipes++;
+	PushRecentWipeAttempt(g_bAttemptFlowValid, g_fAttemptMaxPercent);
 
 	if (g_bAttemptFlowValid)
 	{
+		g_iConsecutiveInvalidWipes = 0;
 		PushWipeSample(g_fAttemptMaxPercent);
 
 		if (g_fAttemptMaxPercent < g_cvEarlyPercent.FloatValue)
 		{
 			g_iEarlyWipes++;
+			FormatEx(
+				g_sLastWipeReason,
+				sizeof(g_sLastWipeReason),
+				"%.1f%%，计入 %.0f%% 前有效团灭",
+				g_fAttemptMaxPercent,
+				g_cvEarlyPercent.FloatValue
+			);
+		}
+		else
+		{
+			FormatEx(
+				g_sLastWipeReason,
+				sizeof(g_sLastWipeReason),
+				"%.1f%%，达到或超过 %.0f%%，未计入第一阶",
+				g_fAttemptMaxPercent,
+				g_cvEarlyPercent.FloatValue
+			);
 		}
 	}
 	else
 	{
-		LogMessage("本次团灭没有取得有效路程，未计入早期团灭和最近五次路程。");
+		g_iConsecutiveInvalidWipes++;
+		if (g_bMapFlowDisabled)
+		{
+			strcopy(g_sLastWipeReason, sizeof(g_sLastWipeReason), "地图配置已禁用路程，未计入第一阶");
+		}
+		else
+		{
+			strcopy(g_sLastWipeReason, sizeof(g_sLastWipeReason), "未取得有效路程，未计入第一阶");
+		}
+		LogMessage("本次团灭没有取得有效路程，未计入早期团灭和第二阶有效路程样本。");
+
+		if (!g_bFlowFallbackActive && g_iConsecutiveInvalidWipes >= g_cvFallbackInvalidWipes.IntValue)
+		{
+			g_bFlowFallbackActive = true;
+			g_bTier2VotePending = false;
+			g_bTier3VotePending = false;
+			g_bTier2TargetValid = false;
+			PrintToChatAll(
+				"\x04[动态减难]\x05 连续 \x03%d\x05 次团灭无法取得路程，已启用导航备用模式；总团灭达到 \x03%d\x05 次可触发第一阶，第二、三阶暂停。",
+				g_iConsecutiveInvalidWipes,
+				g_cvFallbackTier1Wipes.IntValue
+			);
+			LogMessage(
+				"连续 %d 次团灭无法取得路程，启用导航备用模式；第一阶改用总团灭阈值 %d，第二、三阶暂停。",
+				g_iConsecutiveInvalidWipes,
+				g_cvFallbackTier1Wipes.IntValue
+			);
+		}
 	}
 
 	if (g_bTier1Enabled)
@@ -261,13 +363,19 @@ public void Event_MissionLost(Event event, const char[] name, bool dontBroadcast
 		g_bPillsPending = true;
 	}
 
-	if (!g_bTier1Enabled && g_iEarlyWipes >= g_cvTier1Wipes.IntValue)
+	bool tier1NormalReady = g_iEarlyWipes >= g_cvTier1Wipes.IntValue;
+	bool tier1FallbackReady = g_bFlowFallbackActive && g_iTotalWipes >= g_cvFallbackTier1Wipes.IntValue;
+	if (!g_bTier1Enabled && (tier1NormalReady || tier1FallbackReady))
 	{
 		g_bTier1VotePending = true;
 	}
-	else if (g_bTier1Enabled && !g_bTier2Enabled && g_iTotalWipes >= g_cvTier2Wipes.IntValue)
+	else if (g_bTier1Enabled && !g_bTier2Enabled && !g_bFlowFallbackActive && g_iTotalWipes >= g_cvTier2Wipes.IntValue)
 	{
 		g_bTier2VotePending = true;
+	}
+	else if (g_bTier2Enabled && !g_bTier3Enabled && !g_bFlowFallbackActive && g_iTotalWipes >= g_cvTier3Wipes.IntValue)
+	{
+		g_bTier3VotePending = true;
 	}
 
 	char percentText[16];
@@ -281,8 +389,10 @@ public void Event_MissionLost(Event event, const char[] name, bool dontBroadcast
 	}
 
 	PrintToChatAll(
-		"\x04[动态减难]\x05 本章已团灭 \x03%d\x05 次，本次最远路程：\x03%s\x05。",
+		"\x04[动态减难]\x05 本章已团灭 \x03%d\x05 次，75%% 前有效团灭：\x03%d/%d\x05，本次最远路程：\x03%s\x05。",
 		g_iTotalWipes,
+		g_iEarlyWipes,
+		g_cvTier1Wipes.IntValue,
 		percentText
 	);
 }
@@ -294,7 +404,7 @@ public void Event_VotePassed(Event event, const char[] name, bool dontBroadcast)
 
 	if (StrEqual(details, "#L4D_vote_passed_restart_game", false))
 	{
-		ResetChapterState();
+		ResetChapterState("官方重新开始战役投票");
 		LogMessage("检测到官方重新开始战役投票通过，已清空动态减难状态。");
 	}
 }
@@ -314,14 +424,18 @@ public Action Timer_RoundSetup(Handle timer, any serial)
 	bool pillsHandled = HandlePendingPills();
 	bool voteHandled = HandlePendingVote();
 
-	if ((pillsHandled && voteHandled) || g_iSetupRetries >= VOTE_RETRY_LIMIT)
+	if (pillsHandled && voteHandled)
 	{
-		if (g_iSetupRetries >= VOTE_RETRY_LIMIT && (!pillsHandled || !voteHandled))
-		{
-			LogMessage("回合开始后等待真人、存活生还者或投票空档超时，未完成的效果保留到下一次重试。");
-		}
 		g_hRoundSetupTimer = null;
 		return Plugin_Stop;
+	}
+
+	if (g_iSetupRetries % SETUP_RETRY_LOG_INTERVAL == 0)
+	{
+		LogMessage(
+			"回合开始后仍在等待真人、存活生还者或投票空档；已等待约 %d 秒，将继续重试。",
+			g_iSetupRetries * 2
+		);
 	}
 
 	return Plugin_Continue;
@@ -335,29 +449,37 @@ public Action Timer_TrackFlow(Handle timer)
 	}
 
 	float percent;
-	if (!GetCurrentFlowPercent(percent))
+	if (!UpdateAttemptFlowSample(percent))
 	{
 		return Plugin_Continue;
 	}
 
-	if (!g_bAttemptFlowValid || percent > g_fAttemptMaxPercent)
-	{
-		g_bAttemptFlowValid = true;
-		g_fAttemptMaxPercent = percent;
-	}
-
-	if (g_bTier2Enabled && g_bTier2TargetValid && !g_bTier2Triggered && percent >= g_fTier2Target)
+	if (g_bTier2Enabled && !g_bFlowFallbackActive && g_bTier2TargetValid && !g_bTier2Triggered && percent >= g_fTier2Target)
 	{
 		g_bTier2Triggered = true;
-		int revived = ReviveDeadHumanSurvivors();
+		int medicinesGiven;
+		int revived = ReviveDeadHumanSurvivors(g_bTier3Enabled, medicinesGiven);
 
 		if (revived > 0)
 		{
-			PrintToChatAll(
-				"\x04[动态减难]\x05 已到达最近五次平均团灭路程 \x03%.1f%%\x05，复活了 \x03%d\x05 名死亡真人。",
-				g_fTier2Target,
-				revived
-			);
+			if (g_bTier3Enabled)
+			{
+				PrintToChatAll(
+					"\x04[动态减难]\x05 已到达最近五次平均团灭路程 \x03%.1f%%\x05，复活了 \x03%d\x05 名死亡真人，并为 \x03%d/%d\x05 名发放随机药品。",
+					g_fTier2Target,
+					revived,
+					medicinesGiven,
+					revived
+				);
+			}
+			else
+			{
+				PrintToChatAll(
+					"\x04[动态减难]\x05 已到达最近五次平均团灭路程 \x03%.1f%%\x05，复活了 \x03%d\x05 名死亡真人。",
+					g_fTier2Target,
+					revived
+				);
+			}
 		}
 		else
 		{
@@ -366,6 +488,21 @@ public Action Timer_TrackFlow(Handle timer)
 	}
 
 	return Plugin_Continue;
+}
+
+bool UpdateAttemptFlowSample(float &percent)
+{
+	if (!GetCurrentFlowPercent(percent))
+	{
+		return false;
+	}
+
+	if (!g_bAttemptFlowValid || percent > g_fAttemptMaxPercent)
+	{
+		g_bAttemptFlowValid = true;
+		g_fAttemptMaxPercent = percent;
+	}
+	return true;
 }
 
 bool HandlePendingPills()
@@ -439,9 +576,13 @@ bool HandlePendingVote()
 	{
 		voteType = AssistVote_Tier1;
 	}
-	else if (g_bTier2VotePending && g_bTier1Enabled && !g_bTier2Enabled)
+	else if (g_bTier2VotePending && g_bTier1Enabled && !g_bTier2Enabled && !g_bFlowFallbackActive)
 	{
 		voteType = AssistVote_Tier2;
+	}
+	else if (g_bTier3VotePending && g_bTier2Enabled && !g_bTier3Enabled && !g_bFlowFallbackActive)
+	{
+		voteType = AssistVote_Tier3;
 	}
 	else
 	{
@@ -478,9 +619,13 @@ bool HandlePendingVote()
 	{
 		vote.SetTitle("检测到地图难度过高，开启第一阶减难？");
 	}
-	else
+	else if (voteType == AssistVote_Tier2)
 	{
 		vote.SetTitle("多次团灭，开启第二阶路程复活？");
+	}
+	else
+	{
+		vote.SetTitle("继续多次团灭，开启第三阶复活药品？");
 	}
 
 	g_eActiveVote = voteType;
@@ -499,10 +644,15 @@ bool HandlePendingVote()
 		g_bTier1VotePending = false;
 		PrintToChatAll("\x04[动态减难]\x05 第一阶投票开始；必须所有在线真人都投票，否则本次作废。");
 	}
-	else
+	else if (voteType == AssistVote_Tier2)
 	{
 		g_bTier2VotePending = false;
 		PrintToChatAll("\x04[动态减难]\x05 第二阶投票开始；必须所有在线真人都投票，否则本次作废。");
+	}
+	else
+	{
+		g_bTier3VotePending = false;
+		PrintToChatAll("\x04[动态减难]\x05 第三阶投票开始；必须所有在线真人都投票，否则本次作废。");
 	}
 
 	return true;
@@ -572,6 +722,12 @@ void VoteHandler_Assistance(L4D2NativeVote vote, VoteAction action, int param1, 
 					PrintToChatAll("\x04[动态减难]\x05 第二阶已开启，但有效团灭路程不足 5 次，本回合不会复活。");
 				}
 			}
+			else if (voteType == AssistVote_Tier3)
+			{
+				vote.SetPass("第三阶减难已开启");
+				g_bTier3Enabled = true;
+				PrintToChatAll("\x04[动态减难]\x05 第三阶已开启：后续路程复活的死亡真人会随机获得止痛药或肾上腺素。");
+			}
 
 			g_eActiveVote = AssistVote_None;
 			g_iExpectedVoters = 0;
@@ -636,9 +792,51 @@ void PushWipeSample(float percent)
 	}
 }
 
+void PushRecentWipeAttempt(bool valid, float percent)
+{
+	g_bRecentWipeValid[g_iRecentWipeNext] = valid;
+	g_fRecentWipePercents[g_iRecentWipeNext] = valid ? percent : 0.0;
+	g_iRecentWipeNext = (g_iRecentWipeNext + 1) % SAMPLE_COUNT;
+	if (g_iRecentWipeCount < SAMPLE_COUNT)
+	{
+		g_iRecentWipeCount++;
+	}
+}
+
+void FormatRecentWipes(char[] buffer, int maxlen)
+{
+	buffer[0] = '\0';
+	if (g_iRecentWipeCount <= 0)
+	{
+		strcopy(buffer, maxlen, "无");
+		return;
+	}
+
+	int start = g_iRecentWipeCount < SAMPLE_COUNT ? 0 : g_iRecentWipeNext;
+	for (int i = 0; i < g_iRecentWipeCount; i++)
+	{
+		int index = (start + i) % SAMPLE_COUNT;
+		char item[20];
+		if (g_bRecentWipeValid[index])
+		{
+			FormatEx(item, sizeof(item), "%.1f%%", g_fRecentWipePercents[index]);
+		}
+		else
+		{
+			strcopy(item, sizeof(item), "无效");
+		}
+
+		if (i > 0)
+		{
+			StrCat(buffer, maxlen, "、");
+		}
+		StrCat(buffer, maxlen, item);
+	}
+}
+
 bool CalculateWipeAverage(float &average)
 {
-	if (g_iWipeSampleCount < SAMPLE_COUNT || g_bMapFlowDisabled)
+	if (g_iWipeSampleCount < SAMPLE_COUNT || g_bMapFlowDisabled || g_bFlowFallbackActive)
 	{
 		return false;
 	}
@@ -653,8 +851,9 @@ bool CalculateWipeAverage(float &average)
 	return average >= 0.0 && average <= 100.0;
 }
 
-int ReviveDeadHumanSurvivors()
+int ReviveDeadHumanSurvivors(bool giveMedicine, int &medicinesGiven)
 {
+	medicinesGiven = 0;
 	int anchors[MAXPLAYERS];
 	int anchorCount = 0;
 
@@ -703,10 +902,47 @@ int ReviveDeadHumanSurvivors()
 		{
 			SetEntProp(client, Prop_Send, "m_isGoingToDie", 0);
 		}
+		if (giveMedicine && GiveRandomMedicine(client))
+		{
+			medicinesGiven++;
+		}
 		revived++;
 	}
 
 	return revived;
+}
+
+bool GiveRandomMedicine(int client)
+{
+	char classname[32];
+	if (GetRandomInt(0, 1) == 0)
+	{
+		strcopy(classname, sizeof(classname), "weapon_pain_pills");
+	}
+	else
+	{
+		strcopy(classname, sizeof(classname), "weapon_adrenaline");
+	}
+
+	if (GivePlayerItem(client, classname) != -1)
+	{
+		return true;
+	}
+
+	int entity = CreateEntityByName(classname);
+	if (entity == -1)
+	{
+		LogError("无法为复活玩家 %N 创建随机药品 %s。", client, classname);
+		return false;
+	}
+
+	float position[3];
+	GetClientAbsOrigin(client, position);
+	position[2] += 12.0;
+	DispatchSpawn(entity);
+	TeleportEntity(entity, position, NULL_VECTOR, NULL_VECTOR);
+	LogMessage("无法把随机药品 %s 直接放入玩家 %N 的物品栏，已生成在脚下。", classname, client);
+	return true;
 }
 
 int CountHumanSurvivors()
@@ -817,8 +1053,33 @@ void LoadMapFlowConfig()
 
 public Action Command_Status(int client, int args)
 {
+	char currentAttempt[32];
+	if (g_bAttemptFlowValid)
+	{
+		FormatEx(currentAttempt, sizeof(currentAttempt), "%.1f%%", g_fAttemptMaxPercent);
+	}
+	else if (g_bMapFlowDisabled)
+	{
+		strcopy(currentAttempt, sizeof(currentAttempt), "地图禁用");
+	}
+	else if (g_bRoundActive)
+	{
+		strcopy(currentAttempt, sizeof(currentAttempt), "等待导航数据");
+	}
+	else
+	{
+		strcopy(currentAttempt, sizeof(currentAttempt), "无效");
+	}
+
+	char recentWipes[96];
+	FormatRecentWipes(recentWipes, sizeof(recentWipes));
+
 	char target[32];
-	if (g_bTier2TargetValid)
+	if (g_bFlowFallbackActive)
+	{
+		strcopy(target, sizeof(target), "导航备用模式暂停");
+	}
+	else if (g_bTier2TargetValid)
 	{
 		FormatEx(target, sizeof(target), "%.1f%%", g_fTier2Target);
 	}
@@ -827,15 +1088,99 @@ public Action Command_Status(int client, int args)
 		strcopy(target, sizeof(target), "无");
 	}
 
-	ReplyToCommand(client, "[动态减难] 总团灭:%d 75%%前团灭:%d 有效样本:%d/5", g_iTotalWipes, g_iEarlyWipes, g_iWipeSampleCount);
-	ReplyToCommand(client, "[动态减难] 第一阶:%s 第二阶:%s 本回合复活点:%s", g_bTier1Enabled ? "开" : "关", g_bTier2Enabled ? "开" : "关", target);
+	char voteState[96];
+	if (g_eActiveVote == AssistVote_Tier1)
+	{
+		FormatEx(voteState, sizeof(voteState), "第一阶投票中 %d/%d", g_iReceivedVotes, g_iExpectedVoters);
+	}
+	else if (g_eActiveVote == AssistVote_Tier2)
+	{
+		FormatEx(voteState, sizeof(voteState), "第二阶投票中 %d/%d", g_iReceivedVotes, g_iExpectedVoters);
+	}
+	else if (g_eActiveVote == AssistVote_Tier3)
+	{
+		FormatEx(voteState, sizeof(voteState), "第三阶投票中 %d/%d", g_iReceivedVotes, g_iExpectedVoters);
+	}
+	else if (g_bTier1VotePending)
+	{
+		strcopy(voteState, sizeof(voteState), "第一阶投票等待下一回合或投票空档");
+	}
+	else if (g_bTier2VotePending && !g_bFlowFallbackActive)
+	{
+		strcopy(voteState, sizeof(voteState), "第二阶投票等待下一回合或投票空档");
+	}
+	else if (g_bTier3VotePending && !g_bFlowFallbackActive)
+	{
+		strcopy(voteState, sizeof(voteState), "第三阶投票等待下一回合或投票空档");
+	}
+	else
+	{
+		strcopy(voteState, sizeof(voteState), "无");
+	}
+
+	char nextStep[128];
+	if (!g_cvEnable.BoolValue)
+	{
+		strcopy(nextStep, sizeof(nextStep), "插件已关闭");
+	}
+	else if (!g_bTier1Enabled)
+	{
+		if (g_bTier1VotePending || g_eActiveVote == AssistVote_Tier1)
+		{
+			strcopy(nextStep, sizeof(nextStep), "第一阶条件已满足，等待投票结果");
+		}
+		else if (g_bFlowFallbackActive)
+		{
+			FormatEx(
+				nextStep,
+				sizeof(nextStep),
+				"导航备用：总团灭 %d/%d",
+				g_iTotalWipes,
+				g_cvFallbackTier1Wipes.IntValue
+			);
+		}
+		else
+		{
+			FormatEx(
+				nextStep,
+				sizeof(nextStep),
+				"第一阶：%.0f%% 前有效团灭 %d/%d",
+				g_cvEarlyPercent.FloatValue,
+				g_iEarlyWipes,
+				g_cvTier1Wipes.IntValue
+			);
+		}
+	}
+	else if (g_bFlowFallbackActive)
+	{
+		strcopy(nextStep, sizeof(nextStep), "第一阶已开启；第二、三阶因导航备用模式暂停");
+	}
+	else if (!g_bTier2Enabled)
+	{
+		FormatEx(nextStep, sizeof(nextStep), "第二阶：总团灭 %d/%d", g_iTotalWipes, g_cvTier2Wipes.IntValue);
+	}
+	else if (!g_bTier3Enabled)
+	{
+		FormatEx(nextStep, sizeof(nextStep), "第三阶：总团灭 %d/%d", g_iTotalWipes, g_cvTier3Wipes.IntValue);
+	}
+	else
+	{
+		strcopy(nextStep, sizeof(nextStep), "第一、二、三阶均已开启");
+	}
+
+	ReplyToCommand(client, "[动态减难] 版本:%s 状态:%s 当前尝试:%s", PLUGIN_VERSION, g_cvEnable.BoolValue ? "开" : "关", currentAttempt);
+	ReplyToCommand(client, "[动态减难] 总团灭:%d %.0f%%前团灭:%d/%d 连续无效:%d/%d", g_iTotalWipes, g_cvEarlyPercent.FloatValue, g_iEarlyWipes, g_cvTier1Wipes.IntValue, g_iConsecutiveInvalidWipes, g_cvFallbackInvalidWipes.IntValue);
+	ReplyToCommand(client, "[动态减难] 最近5次:%s 第二阶有效样本:%d/5", recentWipes, g_iWipeSampleCount);
+	ReplyToCommand(client, "[动态减难] 第一阶:%s 第二阶:%s 第三阶:%s 导航备用:%s 复活点:%s", g_bTier1Enabled ? "开" : "关", g_bTier2Enabled ? "开" : "关", g_bTier3Enabled ? "开" : "关", g_bFlowFallbackActive ? "开" : "关", target);
+	ReplyToCommand(client, "[动态减难] 下一步:%s 投票:%s", nextStep, voteState);
+	ReplyToCommand(client, "[动态减难] 上次团灭:%s 上次重置:%s", g_sLastWipeReason, g_sLastResetReason);
 	ReplyToCommand(client, "[动态减难] 地图路程:%s 最大路程覆盖:%.1f", g_bMapFlowDisabled ? "禁用" : "启用", g_fMapMaxFlowOverride);
 	return Plugin_Handled;
 }
 
 public Action Command_Reset(int client, int args)
 {
-	ResetChapterState();
+	ResetChapterState("管理员手动重置");
 	g_bRoundActive = true;
 	g_iRoundSerial++;
 	ReplyToCommand(client, "[动态减难] 已清空当前章节的所有计数和减难状态。");

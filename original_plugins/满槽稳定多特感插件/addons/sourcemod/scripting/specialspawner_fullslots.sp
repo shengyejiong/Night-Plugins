@@ -37,7 +37,8 @@ Handle
 	g_hSpawnTimer,
 	g_hRetryTimer,
 	g_hUpdateTimer,
-	g_hSuicideTimer;
+	g_hSuicideTimer,
+	g_hRoundStartCheckTimer;
 
 ConVar
 	g_cSILimit,
@@ -143,7 +144,7 @@ public Plugin myinfo = {
 	name = "Special Spawner - Full Slots",
 	author = "Tordecybombo, breezy, night",
 	description = "Special infected spawning with full-slot retry protection",
-	version = "1.3.8-night",
+	version = "1.3.10-night",
 };
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) {
@@ -315,6 +316,8 @@ public Action L4D_OnGetScriptValueInt(const char[] key, int &retVal) {
 }
 
 public void L4D_OnFirstSurvivorLeftSafeArea_Post(int client) {
+	delete g_hRoundStartCheckTimer;
+
 	if (g_bLeftSafeArea)
 		return;
 
@@ -744,16 +747,10 @@ void GetCvars_TankCustom() {
 }
 
 public void OnClientDisconnect(int client) {
-	if (!client || !IsClientInGame(client) || GetClientTeam(client) != 3)
+	if (!client || !IsClientInGame(client) || GetClientTeam(client) != 3 || GetEntProp(client, Prop_Send, "m_zombieClass") != 8)
 		return;
 
-	int zombieClass = GetEntProp(client, Prop_Send, "m_zombieClass");
-	if (zombieClass == 8) {
-		CreateTimer(0.1, tmrTankDisconnect, _, TIMER_FLAG_NO_MAPCHANGE);
-	}
-	else if (IsFakeClient(client) && 1 <= zombieClass <= SI_MAX_SIZE) {
-		ScheduleRetrySpawn(0.2, true);
-	}
+	CreateTimer(0.1, tmrTankDisconnect, _, TIMER_FLAG_NO_MAPCHANGE);
 }
 
 public void OnMapEnd() {
@@ -762,6 +759,7 @@ public void OnMapEnd() {
 
 	EndSpawnTimer();
 	delete g_hSuicideTimer;
+	delete g_hRoundStartCheckTimer;
 	TankStatusActoin(false);
 
 	if (g_iCurrentClass >= SI_MAX_SIZE)
@@ -775,7 +773,25 @@ void Event_RoundEnd(Event event, const char[] name, bool dontBroadcast) {
 }
 
 void Event_RoundStart(Event event, const char[] name, bool dontBroadcast) {
+	g_bLeftSafeArea = false;
 	EndSpawnTimer();
+	delete g_hSuicideTimer;
+	delete g_hRoundStartCheckTimer;
+	g_hRoundStartCheckTimer = CreateTimer(2.0, tmrRoundStartCheck, _, TIMER_REPEAT|TIMER_FLAG_NO_MAPCHANGE);
+}
+
+Action tmrRoundStartCheck(Handle timer) {
+	if (g_bLeftSafeArea) {
+		g_hRoundStartCheckTimer = null;
+		return Plugin_Stop;
+	}
+
+	if (!L4D_HasAnySurvivorLeftSafeArea())
+		return Plugin_Continue;
+
+	g_hRoundStartCheckTimer = null;
+	L4D_OnFirstSurvivorLeftSafeArea_Post(0);
+	return Plugin_Stop;
 }
 
 void Event_PlayerHurt(Event event, const char[] name, bool dontBroadcast) {

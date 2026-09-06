@@ -22,6 +22,10 @@
 #define CONTROL_JOCKEY  3
 #define CONTROL_CHARGER 4
 
+#define HUNTER_AIRKILL_OTHER   0
+#define HUNTER_AIRKILL_SHOTGUN 1
+#define HUNTER_AIRKILL_MELEE   2
+
 #define MAX_TRACKED_ENTITIES 2049
 
 #define DecayWeapon_None            -1
@@ -41,7 +45,7 @@ public Plugin myinfo =
     name = "L4D2 Multi-SI Campaign Experience",
     author = "night",
     description = "Round and long-term experience rating for multi-SI coop servers.",
-    version = "1.7.4",
+    version = "1.10.6",
     url = ""
 };
 
@@ -81,6 +85,8 @@ ConVar g_hW_ChargerLevel;
 ConVar g_hW_FastClear;
 ConVar g_hW_SmokerSelfClear;
 ConVar g_hFastClearTime;
+ConVar g_hFinisherMinKills;
+ConVar g_hHeadshotMinKills;
 
 ConVar g_hWeaponMult_SMG;
 ConVar g_hWeaponMult_SMGSilenced;
@@ -131,6 +137,9 @@ ConVar g_hShortRoundFullTime;
 ConVar g_hShortRoundMinWeightScale;
 ConVar g_hWinLowTeamScoreFloor;
 ConVar g_hWinLowScoreNegativeScale;
+ConVar g_hAllNegativeGuard;
+ConVar g_hAllNegativeMinPlayers;
+ConVar g_hAllNegativeScale;
 ConVar g_hEndgameOutsideDeathGuard;
 ConVar g_hEndgameOutsideDeathNegativeScale;
 ConVar g_hAnnounce;
@@ -141,6 +150,7 @@ ConVar g_hSave;
 float g_fSIDamage[MAXPLAYERS + 1];
 float g_fSIRawDamage[MAXPLAYERS + 1];
 int   g_iSIKills[MAXPLAYERS + 1];
+int   g_iSIHeadshotKills[MAXPLAYERS + 1];
 int   g_iCommonKills[MAXPLAYERS + 1];
 int   g_iClears[MAXPLAYERS + 1];
 int   g_iRevives[MAXPLAYERS + 1];
@@ -181,6 +191,16 @@ int   g_iSmokerSelfClears[MAXPLAYERS + 1];
 int   g_iLastFastClearPinner[MAXPLAYERS + 1];
 int   g_iLastFastClearVictim[MAXPLAYERS + 1];
 float g_fLastFastClearAt[MAXPLAYERS + 1];
+
+int   g_iHunterFinisherKills[MAXPLAYERS + 1];
+int   g_iJockeyFinisherKills[MAXPLAYERS + 1];
+int   g_iChargerFinisherKills[MAXPLAYERS + 1];
+int   g_iHunterFinisherAssists[MAXPLAYERS + 1];
+int   g_iHunterTargetKills[MAXPLAYERS + 1];
+int   g_iJockeyTargetKills[MAXPLAYERS + 1];
+int   g_iChargerTargetKills[MAXPLAYERS + 1];
+bool  g_bHunterAirKillCounted[MAXPLAYERS + 1];
+bool  g_bHunterAirKillAssistCounted[MAXPLAYERS + 1][MAXPLAYERS + 1];
 
 int   g_iControlsTaken[MAXPLAYERS + 1];
 float g_fControlDuration[MAXPLAYERS + 1];
@@ -235,18 +255,18 @@ public void OnPluginStart()
 
     g_hBaseScore = CreateConVar("l4d2_mexp_base_score", "100.0", "Base round performance score.", FCVAR_NOTIFY);
     g_hScoreMin = CreateConVar("l4d2_mexp_score_min", "0.0", "Minimum round score.", FCVAR_NOTIFY);
-    g_hScoreMax = CreateConVar("l4d2_mexp_score_max", "400.0", "Maximum round score.", FCVAR_NOTIFY);
-    g_hScoreSoftcap = CreateConVar("l4d2_mexp_score_softcap", "300.0", "Score above this value is compressed before final min/max clamp.", FCVAR_NOTIFY);
+    g_hScoreMax = CreateConVar("l4d2_mexp_score_max", "600.0", "Maximum round score.", FCVAR_NOTIFY);
+    g_hScoreSoftcap = CreateConVar("l4d2_mexp_score_softcap", "350.0", "Score above this value is compressed before final min/max clamp.", FCVAR_NOTIFY);
     g_hScoreSoftcapScale = CreateConVar("l4d2_mexp_score_softcap_scale", "0.5", "Multiplier for score above softcap. 1.0 disables compression.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 
-    g_hW_SIDamage = CreateConVar("l4d2_mexp_w_si_damage", "0.006", "Score per 1 damage dealt to normal special infected. 0.006 = +1 per 167 damage.", FCVAR_NOTIFY);
-    g_hW_SIKill = CreateConVar("l4d2_mexp_w_si_kill", "0.35", "Score per normal special infected killing blow.", FCVAR_NOTIFY);
-    g_hW_CommonKill = CreateConVar("l4d2_mexp_w_common_kill", "0.125", "Score per common infected kill. 0.125 = +1 per 8 commons.", FCVAR_NOTIFY);
+    g_hW_SIDamage = CreateConVar("l4d2_mexp_w_si_damage", "0.01", "Score per 1 damage dealt to normal special infected. 0.01 = +1 per 100 damage.", FCVAR_NOTIFY);
+    g_hW_SIKill = CreateConVar("l4d2_mexp_w_si_kill", "0.2", "Score per normal special infected killing blow.", FCVAR_NOTIFY);
+    g_hW_CommonKill = CreateConVar("l4d2_mexp_w_common_kill", "0.14", "Score per common infected kill. 0.14 = about +1 per 7 commons.", FCVAR_NOTIFY);
     g_hW_Clear = CreateConVar("l4d2_mexp_w_clear", "12.0", "Score per clear/save by killing a controlling SI.", FCVAR_NOTIFY);
     g_hW_Revive = CreateConVar("l4d2_mexp_w_revive", "5.0", "Score per successful revive.", FCVAR_NOTIFY);
     g_hW_Defib = CreateConVar("l4d2_mexp_w_defib", "12.0", "Score per defibrillator revive.", FCVAR_NOTIFY);
-    g_hW_ControlSurvive = CreateConVar("l4d2_mexp_w_control_survive", "4.0", "Score for surviving a control without incap/death. Helps frontliners who absorb pressure.", FCVAR_NOTIFY);
-    g_hW_TankDamage = CreateConVar("l4d2_mexp_w_tank_damage", "0.002", "Score per 1 Tank damage. 0.002 = +1 per 500 Tank damage.", FCVAR_NOTIFY);
+    g_hW_ControlSurvive = CreateConVar("l4d2_mexp_w_control_survive", "3.5", "Score for surviving a control without incap/death. Helps frontliners who absorb pressure.", FCVAR_NOTIFY);
+    g_hW_TankDamage = CreateConVar("l4d2_mexp_w_tank_damage", "0.003", "Score per 1 Tank damage. 0.003 = about +1 per 333 Tank damage.", FCVAR_NOTIFY);
     g_hW_TankKill = CreateConVar("l4d2_mexp_w_tank_kill", "5.0", "Score per Tank killing blow.", FCVAR_NOTIFY);
     g_hW_TankTopDamage = CreateConVar("l4d2_mexp_w_tank_top_damage", "10.0", "Score for dealing the most damage to one Tank.", FCVAR_NOTIFY);
     g_hW_WitchKill = CreateConVar("l4d2_mexp_w_witch_kill", "5.0", "Score per Witch kill.", FCVAR_NOTIFY);
@@ -261,22 +281,24 @@ public void OnPluginStart()
     g_hW_FastClear = CreateConVar("l4d2_mexp_w_fast_clear", "0.8", "Extra score per fast teammate clear reported by skill_detect.", FCVAR_NOTIFY, true, 0.0);
     g_hW_SmokerSelfClear = CreateConVar("l4d2_mexp_w_smoker_self_clear", "0.6", "Score per Smoker self-clear reported by skill_detect.", FCVAR_NOTIFY, true, 0.0);
     g_hFastClearTime = CreateConVar("l4d2_mexp_fast_clear_time", "0.75", "Maximum control duration in seconds for the fast-clear bonus. 0 disables.", FCVAR_NOTIFY, true, 0.0);
+    g_hFinisherMinKills = CreateConVar("l4d2_mexp_finisher_min_kills", "20", "Minimum Hunter/Jockey/Charger kills required for the round finisher-rate leader.", FCVAR_NOTIFY, true, 0.0);
+    g_hHeadshotMinKills = CreateConVar("l4d2_mexp_headshot_min_kills", "20", "Minimum normal special infected kills required for the round headshot-rate leader.", FCVAR_NOTIFY, true, 0.0);
 
-    g_hWeaponMult_SMG = CreateConVar("l4d2_mexp_weapon_mult_smg", "1.25", "Damage score multiplier for Uzi/SMG.", FCVAR_NOTIFY, true, 0.0);
-    g_hWeaponMult_SMGSilenced = CreateConVar("l4d2_mexp_weapon_mult_smg_silenced", "1.2", "Damage score multiplier for silenced SMG.", FCVAR_NOTIFY, true, 0.0);
-    g_hWeaponMult_PumpShotgun = CreateConVar("l4d2_mexp_weapon_mult_pumpshotgun", "1.2", "Damage score multiplier for pump shotgun.", FCVAR_NOTIFY, true, 0.0);
-    g_hWeaponMult_ChromeShotgun = CreateConVar("l4d2_mexp_weapon_mult_shotgun_chrome", "1.2", "Damage score multiplier for chrome shotgun.", FCVAR_NOTIFY, true, 0.0);
-    g_hWeaponMult_MP5 = CreateConVar("l4d2_mexp_weapon_mult_mp5", "1.15", "Damage score multiplier for MP5.", FCVAR_NOTIFY, true, 0.0);
-    g_hWeaponMult_SG552 = CreateConVar("l4d2_mexp_weapon_mult_sg552", "1.1", "Damage score multiplier for SG552.", FCVAR_NOTIFY, true, 0.0);
-    g_hWeaponMult_Rifle = CreateConVar("l4d2_mexp_weapon_mult_rifle", "0.88", "Damage score multiplier for M16.", FCVAR_NOTIFY, true, 0.0);
-    g_hWeaponMult_RifleDesert = CreateConVar("l4d2_mexp_weapon_mult_rifle_desert", "0.88", "Damage score multiplier for SCAR/desert rifle.", FCVAR_NOTIFY, true, 0.0);
-    g_hWeaponMult_RifleAK47 = CreateConVar("l4d2_mexp_weapon_mult_rifle_ak47", "0.92", "Damage score multiplier for AK47.", FCVAR_NOTIFY, true, 0.0);
-    g_hWeaponMult_AutoShotgun = CreateConVar("l4d2_mexp_weapon_mult_autoshotgun", "0.95", "Damage score multiplier for auto shotgun.", FCVAR_NOTIFY, true, 0.0);
-    g_hWeaponMult_SpasShotgun = CreateConVar("l4d2_mexp_weapon_mult_shotgun_spas", "0.95", "Damage score multiplier for SPAS shotgun.", FCVAR_NOTIFY, true, 0.0);
-    g_hWeaponMult_HuntingRifle = CreateConVar("l4d2_mexp_weapon_mult_hunting_rifle", "0.96", "Damage score multiplier for hunting rifle.", FCVAR_NOTIFY, true, 0.0);
-    g_hWeaponMult_SniperMilitary = CreateConVar("l4d2_mexp_weapon_mult_sniper_military", "0.84", "Damage score multiplier for military sniper.", FCVAR_NOTIFY, true, 0.0);
-    g_hWeaponMult_SniperScout = CreateConVar("l4d2_mexp_weapon_mult_sniper_scout", "0.75", "Damage score multiplier for Scout sniper.", FCVAR_NOTIFY, true, 0.0);
-    g_hWeaponMult_SniperAWP = CreateConVar("l4d2_mexp_weapon_mult_sniper_awp", "0.70", "Damage score multiplier for AWP sniper.", FCVAR_NOTIFY, true, 0.0);
+    g_hWeaponMult_SMG = CreateConVar("l4d2_mexp_weapon_mult_smg", "1.3", "Damage score multiplier for Uzi/SMG.", FCVAR_NOTIFY, true, 0.0);
+    g_hWeaponMult_SMGSilenced = CreateConVar("l4d2_mexp_weapon_mult_smg_silenced", "1.25", "Damage score multiplier for silenced SMG.", FCVAR_NOTIFY, true, 0.0);
+    g_hWeaponMult_PumpShotgun = CreateConVar("l4d2_mexp_weapon_mult_pumpshotgun", "1.25", "Damage score multiplier for pump shotgun.", FCVAR_NOTIFY, true, 0.0);
+    g_hWeaponMult_ChromeShotgun = CreateConVar("l4d2_mexp_weapon_mult_shotgun_chrome", "1.25", "Damage score multiplier for chrome shotgun.", FCVAR_NOTIFY, true, 0.0);
+    g_hWeaponMult_MP5 = CreateConVar("l4d2_mexp_weapon_mult_mp5", "1.17", "Damage score multiplier for MP5.", FCVAR_NOTIFY, true, 0.0);
+    g_hWeaponMult_SG552 = CreateConVar("l4d2_mexp_weapon_mult_sg552", "1.14", "Damage score multiplier for SG552.", FCVAR_NOTIFY, true, 0.0);
+    g_hWeaponMult_Rifle = CreateConVar("l4d2_mexp_weapon_mult_rifle", "0.84", "Damage score multiplier for M16.", FCVAR_NOTIFY, true, 0.0);
+    g_hWeaponMult_RifleDesert = CreateConVar("l4d2_mexp_weapon_mult_rifle_desert", "0.84", "Damage score multiplier for SCAR/desert rifle.", FCVAR_NOTIFY, true, 0.0);
+    g_hWeaponMult_RifleAK47 = CreateConVar("l4d2_mexp_weapon_mult_rifle_ak47", "0.87", "Damage score multiplier for AK47.", FCVAR_NOTIFY, true, 0.0);
+    g_hWeaponMult_AutoShotgun = CreateConVar("l4d2_mexp_weapon_mult_autoshotgun", "0.8", "Damage score multiplier for auto shotgun.", FCVAR_NOTIFY, true, 0.0);
+    g_hWeaponMult_SpasShotgun = CreateConVar("l4d2_mexp_weapon_mult_shotgun_spas", "0.8", "Damage score multiplier for SPAS shotgun.", FCVAR_NOTIFY, true, 0.0);
+    g_hWeaponMult_HuntingRifle = CreateConVar("l4d2_mexp_weapon_mult_hunting_rifle", "0.9", "Damage score multiplier for hunting rifle.", FCVAR_NOTIFY, true, 0.0);
+    g_hWeaponMult_SniperMilitary = CreateConVar("l4d2_mexp_weapon_mult_sniper_military", "0.75", "Damage score multiplier for military sniper.", FCVAR_NOTIFY, true, 0.0);
+    g_hWeaponMult_SniperScout = CreateConVar("l4d2_mexp_weapon_mult_sniper_scout", "0.70", "Damage score multiplier for Scout sniper.", FCVAR_NOTIFY, true, 0.0);
+    g_hWeaponMult_SniperAWP = CreateConVar("l4d2_mexp_weapon_mult_sniper_awp", "0.65", "Damage score multiplier for AWP sniper.", FCVAR_NOTIFY, true, 0.0);
     g_hWeaponDecayEnable = CreateConVar("l4d2_mexp_weapon_decay_enable", "1", "0=Disable per-weapon usage decay, 1=Enable for rifles, sniper rifles, and auto shotguns.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
     g_hWeaponDecayEnable.AddChangeHook(ConVarChanged_WeaponDecayEnable);
     g_hWeaponDecayStart = CreateConVar("l4d2_mexp_weapon_decay_start", "120.0", "Full damage score multiplier before this many accumulated active-use seconds.", FCVAR_NOTIFY, true, 0.0);
@@ -290,7 +312,7 @@ public void OnPluginStart()
     g_hAccuracyMinShots = CreateConVar("l4d2_mexp_accuracy_min_shots", "80", "Minimum tracked weapon fires required before accuracy bonus can apply.", FCVAR_NOTIFY, true, 0.0);
     g_hAccuracyFloor = CreateConVar("l4d2_mexp_accuracy_floor", "0.10", "Accuracy below this ratio gives no bonus.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
     g_hAccuracyStep = CreateConVar("l4d2_mexp_accuracy_step", "0.10", "Accuracy ratio per bonus step. 0.10 means 10%-20% = one step.", FCVAR_NOTIFY, true, 0.01, true, 1.0);
-    g_hAccuracyMaxBonus = CreateConVar("l4d2_mexp_accuracy_max_bonus", "6.0", "Maximum round score from accuracy bonus.", FCVAR_NOTIFY, true, 0.0);
+    g_hAccuracyMaxBonus = CreateConVar("l4d2_mexp_accuracy_max_bonus", "8.0", "Maximum round score from accuracy bonus.", FCVAR_NOTIFY, true, 0.0);
 
     g_hP_Control = CreateConVar("l4d2_mexp_p_control", "1.5", "Penalty per time being controlled by SI.", FCVAR_NOTIFY);
     g_hP_ControlTime = CreateConVar("l4d2_mexp_p_control_time", "0.4", "Penalty per second while controlled by SI.", FCVAR_NOTIFY);
@@ -302,16 +324,19 @@ public void OnPluginStart()
     g_hP_RockHit = CreateConVar("l4d2_mexp_p_rock_hit", "10.0", "Penalty per Tank rock hit taken.", FCVAR_NOTIFY);
     g_hP_TankPunch = CreateConVar("l4d2_mexp_p_tank_punch", "4.0", "Penalty per standing Tank punch taken.", FCVAR_NOTIFY);
     g_hP_TankHittable = CreateConVar("l4d2_mexp_p_tank_hittable", "15.0", "Penalty per standing Tank hittable impact taken.", FCVAR_NOTIFY);
-    g_hP_SpitDamage = CreateConVar("l4d2_mexp_p_spit_damage", "0.12", "Penalty per 1 spit damage while standing.", FCVAR_NOTIFY);
+    g_hP_SpitDamage = CreateConVar("l4d2_mexp_p_spit_damage", "0.15", "Penalty per 1 spit damage while standing.", FCVAR_NOTIFY);
 
     g_hDefaultRating = CreateConVar("l4d2_mexp_default_rating", "1000.0", "Default long-term experience rating for new players.", FCVAR_NOTIFY);
-    g_hRatingWeight = CreateConVar("l4d2_mexp_rating_weight", "0.015", "How strongly each valid round affects long-term rating.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
+    g_hRatingWeight = CreateConVar("l4d2_mexp_rating_weight", "0.006", "How strongly each valid round affects long-term rating.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
     g_hRankMinRounds = CreateConVar("l4d2_mexp_rank_min_rounds", "5", "Minimum valid rounds required to appear in personal rating rank. 0 includes everyone.", FCVAR_NOTIFY, true, 0.0);
     g_hShortRoundSkipTime = CreateConVar("l4d2_mexp_short_round_skip_time", "300.0", "Rounds shorter than this many seconds announce stats but do not update long-term rating. 0 disables skip.", FCVAR_NOTIFY, true, 0.0);
     g_hShortRoundFullTime = CreateConVar("l4d2_mexp_short_round_full_time", "600.0", "Rounds at or above this many seconds use full rating weight. 0 disables scaling.", FCVAR_NOTIFY, true, 0.0);
     g_hShortRoundMinWeightScale = CreateConVar("l4d2_mexp_short_round_min_weight_scale", "0.25", "Minimum rating weight scale for rounds between skip time and full time.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
     g_hWinLowTeamScoreFloor = CreateConVar("l4d2_mexp_win_low_team_score_floor", "180.0", "On successful map transition/finale, protect rating loss when average valid player score is below this. 0 disables.", FCVAR_NOTIFY, true, 0.0);
     g_hWinLowScoreNegativeScale = CreateConVar("l4d2_mexp_win_low_score_negative_scale", "0.25", "Rating weight scale for negative updates when win low team score protection triggers.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
+    g_hAllNegativeGuard = CreateConVar("l4d2_mexp_all_negative_guard", "1", "0=Disable, 1=Reduce rating loss when every valid player would lose rating after a win.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
+    g_hAllNegativeMinPlayers = CreateConVar("l4d2_mexp_all_negative_min_players", "3", "Minimum valid players required for all-negative rating protection.", FCVAR_NOTIFY, true, 1.0);
+    g_hAllNegativeScale = CreateConVar("l4d2_mexp_all_negative_scale", "0.10", "Rating weight scale for negative updates when all-negative protection triggers.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
     g_hEndgameOutsideDeathGuard = CreateConVar("l4d2_mexp_endgame_outside_death_guard", "1", "0=Disable, 1=Protect long-term rating loss for outside-saferoom incaps/deaths after someone reaches end saferoom and the team wins.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
     g_hEndgameOutsideDeathNegativeScale = CreateConVar("l4d2_mexp_endgame_outside_death_negative_scale", "0.50", "Rating weight scale for negative updates caused by endgame outside-saferoom incaps/deaths.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 
@@ -328,6 +353,7 @@ public void OnPluginStart()
     HookEvent("finale_win", Event_RoundEnd, EventHookMode_PostNoCopy);
 
     HookEvent("player_team", Event_PlayerTeam, EventHookMode_Post);
+    HookEvent("player_spawn", Event_PlayerSpawn, EventHookMode_Post);
     HookEvent("player_entered_checkpoint", Event_PlayerEnteredCheckpoint, EventHookMode_Post);
     HookEvent("player_left_checkpoint", Event_PlayerLeftCheckpoint, EventHookMode_Post);
     HookEvent("weapon_fire", Event_WeaponFire, EventHookMode_Post);
@@ -353,6 +379,11 @@ public void OnPluginStart()
     RegConsoleCmd("sm_mexp_round", Command_ShowRound, "Show current round experience stats.");
     RegConsoleCmd("sm_mexp_weapon", Command_ShowWeapon, "Show current weapon damage-score decay status.");
     RegAdminCmd("sm_mexp_enable", Command_MExpEnable, ADMFLAG_CONVARS, "Open or change multi-SI experience scoring switch.");
+    RegConsoleCmd("sm_mx", Command_ShowExp, "Short alias for sm_mexp.");
+    RegConsoleCmd("sm_mr", Command_ShowRound, "Short alias for sm_mexp_round.");
+    RegConsoleCmd("sm_mra", Command_ShowRoundAll, "Show full current round experience stats.");
+    RegConsoleCmd("sm_mw", Command_ShowWeapon, "Short alias for sm_mexp_weapon.");
+    RegAdminCmd("sm_mxe", Command_MExpEnable, ADMFLAG_CONVARS, "Short alias for sm_mexp_enable.");
 
     ResetAllRoundStats();
 
@@ -625,7 +656,17 @@ void FinalizeRound()
     }
 
     float teamAverageScore = teamScoreTotal / float(scoreCount);
-    float teamNegativeWeightScale = ratingWeightScale > 0.0 ? GetWinLowScoreNegativeScale(teamAverageScore) : 1.0;
+    float winLowNegativeWeightScale = ratingWeightScale > 0.0 ? GetWinLowScoreNegativeScale(teamAverageScore) : 1.0;
+    float teamNegativeWeightScale = winLowNegativeWeightScale;
+    bool allNegativeGuardActive = ratingWeightScale > 0.0 && ShouldApplyAllNegativeGuard(roundScores, required, scoreCount);
+    if (allNegativeGuardActive)
+    {
+        float allNegativeScale = ClampFloat(g_hAllNegativeScale.FloatValue, 0.0, 1.0);
+        if (allNegativeScale < teamNegativeWeightScale)
+        {
+            teamNegativeWeightScale = allNegativeScale;
+        }
+    }
     bool hasEndgameOutsideGuard = false;
 
     int best = 0;
@@ -644,11 +685,18 @@ void FinalizeRound()
             PrintToChatAll("\x05短图保护：\x01本关时长 %.0f 秒，长期经验影响倍率 %.0f%%。", duration, ratingWeightScale * 100.0);
         }
 
-        if (teamNegativeWeightScale < 0.999)
+        if (winLowNegativeWeightScale < 0.999)
         {
             PrintToChatAll("\x05过关低分保护：\x01团队均分 %.1f，低于 %.1f，本关掉分影响倍率 %.0f%%。",
                 teamAverageScore,
                 g_hWinLowTeamScoreFloor.FloatValue,
+                winLowNegativeWeightScale * 100.0
+            );
+        }
+
+        if (allNegativeGuardActive)
+        {
+            PrintToChatAll("\x05全队掉分保护：\x01所有有效玩家原本都会降低长期经验，本关掉分影响倍率 %.0f%%。",
                 teamNegativeWeightScale * 100.0
             );
         }
@@ -707,6 +755,48 @@ void FinalizeRound()
         }
 
         PrintToChatAll("\x05本局团队核心：\x03%N\x01，综合表现 %.1f 分。", best, bestRoundScore);
+
+        AnnounceFastClearLeaders(required);
+
+        int finisherBest = FindBestFinisher(required);
+        if (IsValidClient(finisherBest))
+        {
+            int finisherKills = GetFinisherKillCount(finisherBest);
+            int targetKills = GetFinisherTargetKillCount(finisherBest);
+            float finisherRate = GetFinisherRate(finisherBest) * 100.0;
+            PrintToChatAll("\x05本局绝杀率最高：\x03%N\x01，绝杀率 %.1f%%（%d/%d）。",
+                finisherBest,
+                finisherRate,
+                finisherKills,
+                targetKills
+            );
+        }
+        else
+        {
+            PrintToChatAll("\x05本局绝杀率：\x01无人达到至少 \x03%d\x01 次目标击杀，暂不评选。",
+                GetFinisherMinimumKills()
+            );
+        }
+
+        AnnounceFinisherAssistLeaders(required);
+
+        int headshotBest = FindBestHeadshot(required);
+        if (IsValidClient(headshotBest))
+        {
+            float headshotRate = GetHeadshotRate(headshotBest) * 100.0;
+            PrintToChatAll("\x05本局爆头率最高：\x03%N\x01，爆头率 %.1f%%（%d/%d）。",
+                headshotBest,
+                headshotRate,
+                g_iSIHeadshotKills[headshotBest],
+                g_iSIKills[headshotBest]
+            );
+        }
+        else
+        {
+            PrintToChatAll("\x05本局爆头率：\x01无人达到至少 \x03%d\x01 次普通特感击杀，暂不评选。",
+                GetHeadshotMinimumKills()
+            );
+        }
     }
 }
 
@@ -764,50 +854,153 @@ public Action Command_ShowRound(int client, int args)
         return Plugin_Handled;
     }
 
+    bool showAll = false;
+    if (args > 0)
+    {
+        char mode[16];
+        GetCmdArg(1, mode, sizeof(mode));
+        if (args != 1 || !StrEqual(mode, "all", false))
+        {
+            PrintToChat(client, "\x04[经验]\x01 用法: !mexp_round 或 !mexp_round all");
+            return Plugin_Handled;
+        }
+        showAll = true;
+    }
+
+    return ShowRoundStats(client, showAll);
+}
+
+public Action Command_ShowRoundAll(int client, int args)
+{
+    if (!IsValidClient(client))
+    {
+        return Plugin_Handled;
+    }
+
+    if (!IsExperienceEnabled())
+    {
+        PrintToChat(client, "\x04[经验]\x01 当前地图经验分计分已关闭，本关不会记录、结算或保存。");
+        return Plugin_Handled;
+    }
+
+    if (args > 0)
+    {
+        PrintToChat(client, "\x04[经验]\x01 用法: !mra");
+        return Plugin_Handled;
+    }
+
+    return ShowRoundStats(client, true);
+}
+
+Action ShowRoundStats(int client, bool showAll)
+{
     float score = CalculateRoundScore(client);
     float accuracy = GetAccuracyRatio(client) * 100.0;
+    int targetKills = GetFinisherTargetKillCount(client);
+    float finisherRate = GetFinisherRate(client) * 100.0;
+    float headshotRate = GetHeadshotRate(client) * 100.0;
+    char finisherSample[24];
+    char headshotSample[24];
+    if (targetKills <= 0 || targetKills < GetFinisherMinimumKills())
+    {
+        strcopy(finisherSample, sizeof(finisherSample), "(样本不足)");
+    }
+    if (g_iSIKills[client] <= 0 || g_iSIKills[client] < GetHeadshotMinimumKills())
+    {
+        strcopy(headshotSample, sizeof(headshotSample), "(样本不足)");
+    }
+
+    PrintToChat(client, "\x04[本关]\x01 评分 %.1f | 特杀 %d | 小尸 %d | 命中 %.0f%%",
+        score,
+        g_iSIKills[client],
+        g_iCommonKills[client],
+        accuracy
+    );
+
+    if (g_fTankRawDamage[client] > 0.0 || g_fTankDamage[client] > 0.0)
+    {
+        PrintToChat(client, "\x04[伤害]\x01 特感 %.0f(计%.0f) | Tank %.0f(计%.0f)",
+            g_fSIRawDamage[client],
+            g_fSIDamage[client],
+            g_fTankRawDamage[client],
+            g_fTankDamage[client]
+        );
+    }
+    else
+    {
+        PrintToChat(client, "\x04[伤害]\x01 特感 %.0f(计%.0f)",
+            g_fSIRawDamage[client],
+            g_fSIDamage[client]
+        );
+    }
+
+    if (!showAll)
+    {
+        PrintToChat(client, "\x04[状态]\x01 清控 %d | 秒救 %d | 被控 %d次/%.1f秒 | 倒地 %d | 死亡 %d",
+            g_iClears[client],
+            g_iFastClears[client],
+            g_iControlsTaken[client],
+            g_fControlDuration[client],
+            g_iIncaps[client],
+            g_iDeaths[client]
+        );
+        PrintToChat(client, "\x04[技巧]\x01 空爆 %d | 近爆 %d | 砍舌 %d | 辅助绝杀 %d",
+            g_iSkeets[client],
+            g_iMeleeSkeets[client],
+            g_iTongueCuts[client],
+            g_iHunterFinisherAssists[client]
+        );
+        PrintToChat(client, "\x04[比率]\x01 绝杀 %.1f%%%s | 爆头 %.1f%%%s",
+            finisherRate,
+            finisherSample,
+            headshotRate,
+            headshotSample
+        );
+        return Plugin_Handled;
+    }
+
     float accuracyBonus = CalculateAccuracyBonus(client);
     float skillBonus = CalculateSkillBonus(client);
+    int finisherKills = GetFinisherKillCount(client);
 
-    PrintToChat(client, "\x04[本关]\x01 评分 %.1f | 命 %.0f%%/%d | 命+ %.1f | 小尸 %d | 特伤 %.0f(计%.0f) | 特杀 %d",
-        score,
-        accuracy,
-        g_iAccuracyShots[client],
-        accuracyBonus,
-        g_iCommonKills[client],
-        g_fSIRawDamage[client],
-        g_fSIDamage[client],
-        g_iSIKills[client]
-    );
-
-    PrintToChat(client, "\x04[输出]\x01 坦伤 %.0f(计%.0f) | 坦杀 %d | 坦一 %d | Witch %d | 石破 %d | 石中 %d",
-        g_fTankRawDamage[client],
-        g_fTankDamage[client],
-        g_iTankKills[client],
-        g_iTankTopDamage[client],
-        g_iWitchKills[client],
-        g_iRockDestroys[client],
-        g_iRockHits[client]
-    );
-
-    PrintToChat(client, "\x04[状态]\x01 清控 %d | 承压 %d | 救人 %d | 被控 %d | 控时 %.1f | 倒地 %d | 安倒 %d | 死亡 %d | 安死 %d",
+    PrintToChat(client, "\x04[状态]\x01 清控 %d | 承压 %d | 救人 %d | 被控 %d次/%.1f秒",
         g_iClears[client],
         g_iControlsSurvived[client],
         g_iRevives[client],
         g_iControlsTaken[client],
-        g_fControlDuration[client],
+        g_fControlDuration[client]
+    );
+
+    PrintToChat(client, "\x04[生存]\x01 倒地 %d(安全屋%d) | 死亡 %d(安全屋%d)",
         g_iIncaps[client],
         g_iSaferoomIncaps[client],
         g_iDeaths[client],
         g_iSaferoomDeaths[client]
     );
 
-    PrintToChat(client, "\x04[失误]\x01 拳 %d | 打铁 %d | 酸 %.0f | 友伤 %.0f",
-        g_iTankPunches[client],
-        g_iTankHittables[client],
+    PrintToChat(client, "\x04[失误]\x01 口水伤害 %.0f | 友伤 %.0f",
         g_fSpitDamage[client],
         g_fFriendlyFire[client]
     );
+
+    if (g_iTankKills[client] > 0 || g_iTankTopDamage[client] > 0
+        || g_iWitchKills[client] > 0 || g_iRockDestroys[client] > 0)
+    {
+        PrintToChat(client, "\x04[首领]\x01 坦杀 %d | 坦伤第一 %d | Witch %d | 破石 %d",
+            g_iTankKills[client],
+            g_iTankTopDamage[client],
+            g_iWitchKills[client],
+            g_iRockDestroys[client]
+        );
+    }
+    if (g_iRockHits[client] > 0 || g_iTankPunches[client] > 0 || g_iTankHittables[client] > 0)
+    {
+        PrintToChat(client, "\x04[坦克受击]\x01 石头 %d | 拳 %d | 打铁 %d",
+            g_iRockHits[client],
+            g_iTankPunches[client],
+            g_iTankHittables[client]
+        );
+    }
 
     PrintToChat(client, "\x04[技巧]\x01 空爆 %d | 近爆 %d | 砍舌 %d | 推停 %d",
         g_iSkeets[client],
@@ -821,6 +1014,34 @@ public Action Command_ShowRound(int client, int args)
         g_iFastClears[client],
         g_iSmokerSelfClears[client],
         skillBonus
+    );
+
+    PrintToChat(client, "\x04[命中]\x01 开火 %d | 命中奖励 %.1f",
+        g_iAccuracyShots[client],
+        accuracyBonus
+    );
+
+    PrintToChat(client, "\x04[绝杀]\x01 H %d/%d | J %d/%d | 牛 %d/%d",
+        g_iHunterFinisherKills[client],
+        g_iHunterTargetKills[client],
+        g_iJockeyFinisherKills[client],
+        g_iJockeyTargetKills[client],
+        g_iChargerFinisherKills[client],
+        g_iChargerTargetKills[client]
+    );
+    PrintToChat(client, "\x04[绝杀]\x01 合计 %d/%d | %.1f%%%s | 辅助绝杀 %d",
+        finisherKills,
+        targetKills,
+        finisherRate,
+        finisherSample,
+        g_iHunterFinisherAssists[client]
+    );
+
+    PrintToChat(client, "\x04[爆头]\x01 六类特感 %d/%d | %.1f%%%s",
+        g_iSIHeadshotKills[client],
+        g_iSIKills[client],
+        headshotRate,
+        headshotSample
     );
 
     return Plugin_Handled;
@@ -845,17 +1066,98 @@ public Action Command_ShowWeapon(int client, int args)
 
 public void OnSkeet(int survivor, int hunter)
 {
-    if (IsValidSurvivor(survivor) && ShouldTrackClient(survivor))
-    {
-        g_iSkeets[survivor]++;
-    }
+    RecordHunterAirKill(survivor, hunter, HUNTER_AIRKILL_SHOTGUN);
+}
+
+public void OnTeamSkeet(int survivor, int hunter)
+{
+    RecordHunterAirKill(survivor, hunter, HUNTER_AIRKILL_SHOTGUN);
+}
+
+public void OnTeamSkeetAssist(int assistant, int survivor, int hunter, int damage)
+{
+    RecordHunterAirKillAssist(assistant, survivor, hunter, damage);
 }
 
 public void OnSkeetMelee(int survivor, int hunter)
 {
-    if (IsValidSurvivor(survivor) && ShouldTrackClient(survivor))
+    RecordHunterAirKill(survivor, hunter, HUNTER_AIRKILL_MELEE);
+}
+
+public void OnSkeetGL(int survivor, int hunter)
+{
+    RecordHunterAirKill(survivor, hunter, HUNTER_AIRKILL_OTHER);
+}
+
+public void OnSkeetSniper(int survivor, int hunter)
+{
+    RecordHunterAirKill(survivor, hunter, HUNTER_AIRKILL_OTHER);
+}
+
+public void OnStatsHunterAirKill(int survivor, int hunter, int airKillType)
+{
+    RecordHunterAirKill(survivor, hunter, airKillType);
+}
+
+public void OnStatsHunterAirKillAssist(int assistant, int survivor, int hunter, int damage)
+{
+    RecordHunterAirKillAssist(assistant, survivor, hunter, damage);
+}
+
+void RecordHunterAirKill(int survivor, int hunter, int airKillType)
+{
+    if (!IsValidSurvivor(survivor) || !ShouldTrackClient(survivor))
+    {
+        return;
+    }
+
+    if (hunter > 0 && hunter <= MaxClients)
+    {
+        if (g_bHunterAirKillCounted[hunter])
+        {
+            return;
+        }
+
+        g_bHunterAirKillCounted[hunter] = true;
+    }
+
+    if (airKillType == HUNTER_AIRKILL_SHOTGUN)
+    {
+        g_iSkeets[survivor]++;
+    }
+    else if (airKillType == HUNTER_AIRKILL_MELEE)
     {
         g_iMeleeSkeets[survivor]++;
+    }
+
+    g_iHunterFinisherKills[survivor]++;
+}
+
+void RecordHunterAirKillAssist(int assistant, int survivor, int hunter, int damage)
+{
+    if (assistant == survivor || damage <= 0 || !IsValidSurvivor(assistant) || !ShouldTrackClient(assistant))
+    {
+        return;
+    }
+
+    if (hunter > 0 && hunter <= MaxClients)
+    {
+        if (g_bHunterAirKillAssistCounted[hunter][assistant])
+        {
+            return;
+        }
+
+        g_bHunterAirKillAssistCounted[hunter][assistant] = true;
+    }
+
+    g_iHunterFinisherAssists[assistant]++;
+}
+
+public void OnJockeySkeet(int survivor, int jockey)
+{
+    if (IsValidSurvivor(survivor) && ShouldTrackClient(survivor))
+    {
+        g_iJockeyFinisherKills[survivor]++;
     }
 }
 
@@ -880,6 +1182,7 @@ public void OnChargerLevel(int survivor, int charger)
     if (IsValidSurvivor(survivor) && ShouldTrackClient(survivor))
     {
         g_iChargerLevels[survivor]++;
+        g_iChargerFinisherKills[survivor]++;
     }
 }
 
@@ -888,6 +1191,7 @@ public void OnChargerLevelHurt(int survivor, int charger, int damage)
     if (IsValidSurvivor(survivor) && ShouldTrackClient(survivor))
     {
         g_iChargerLevels[survivor]++;
+        g_iChargerFinisherKills[survivor]++;
     }
 }
 
@@ -1023,6 +1327,15 @@ void SetExperienceEnabled(bool enabled, int client)
     }
 
     g_hEnable.BoolValue = enabled;
+}
+
+public void Event_PlayerSpawn(Event event, const char[] name, bool dontBroadcast)
+{
+    int client = GetClientOfUserId(event.GetInt("userid"));
+    if (IsValidClient(client) && GetClientTeam(client) == TEAM_INFECTED)
+    {
+        ResetHunterAirKillTracking(client);
+    }
 }
 
 public void Event_PlayerTeam(Event event, const char[] name, bool dontBroadcast)
@@ -1331,6 +1644,26 @@ public void Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast
         if (IsNormalSpecialClass(zc))
         {
             g_iSIKills[attacker]++;
+            if (event.GetBool("headshot"))
+            {
+                g_iSIHeadshotKills[attacker]++;
+            }
+
+            switch (zc)
+            {
+                case ZC_HUNTER:
+                {
+                    g_iHunterTargetKills[attacker]++;
+                }
+                case ZC_JOCKEY:
+                {
+                    g_iJockeyTargetKills[attacker]++;
+                }
+                case ZC_CHARGER:
+                {
+                    g_iChargerTargetKills[attacker]++;
+                }
+            }
 
             int pinned = GetPinnedVictim(victim, zc);
             if (!IsValidSurvivor(pinned))
@@ -1657,6 +1990,245 @@ bool IsValidCandidate(int client, float required)
     return true;
 }
 
+void AnnounceFastClearLeaders(float required)
+{
+    int bestCount = 0;
+    int leaderCount = 0;
+    int leaders[MAXPLAYERS + 1];
+
+    for (int client = 1; client <= MaxClients; client++)
+    {
+        if (!IsValidCandidate(client, required))
+        {
+            continue;
+        }
+
+        if (g_iFastClears[client] > bestCount)
+        {
+            bestCount = g_iFastClears[client];
+            leaderCount = 0;
+            leaders[leaderCount++] = client;
+        }
+        else if (bestCount > 0 && g_iFastClears[client] == bestCount)
+        {
+            leaders[leaderCount++] = client;
+        }
+    }
+
+    if (bestCount <= 0)
+    {
+        return;
+    }
+
+    AnnounceCountLeaders(leaders, leaderCount, bestCount, "秒救");
+}
+
+void AnnounceFinisherAssistLeaders(float required)
+{
+    int bestCount = 0;
+    int leaderCount = 0;
+    int leaders[MAXPLAYERS + 1];
+
+    for (int client = 1; client <= MaxClients; client++)
+    {
+        if (!IsValidCandidate(client, required))
+        {
+            continue;
+        }
+
+        if (g_iHunterFinisherAssists[client] > bestCount)
+        {
+            bestCount = g_iHunterFinisherAssists[client];
+            leaderCount = 0;
+            leaders[leaderCount++] = client;
+        }
+        else if (bestCount > 0 && g_iHunterFinisherAssists[client] == bestCount)
+        {
+            leaders[leaderCount++] = client;
+        }
+    }
+
+    if (bestCount <= 0)
+    {
+        return;
+    }
+
+    AnnounceCountLeaders(leaders, leaderCount, bestCount, "辅助绝杀");
+}
+
+void AnnounceCountLeaders(int leaders[MAXPLAYERS + 1], int leaderCount, int bestCount, const char[] metric)
+{
+    char names[192];
+    char playerName[MAX_NAME_LENGTH];
+    bool hasName = false;
+    names[0] = '\0';
+
+    for (int index = 0; index < leaderCount; index++)
+    {
+        int client = leaders[index];
+        if (!IsValidClient(client))
+        {
+            continue;
+        }
+
+        GetClientName(client, playerName, sizeof(playerName));
+
+        int separatorLength = hasName ? strlen("、") : 0;
+        if (hasName && strlen(names) + separatorLength + strlen(playerName) >= sizeof(names))
+        {
+            PrintCountLeaderLine(names, bestCount, metric);
+            names[0] = '\0';
+            hasName = false;
+        }
+
+        if (hasName)
+        {
+            StrCat(names, sizeof(names), "、");
+        }
+
+        StrCat(names, sizeof(names), playerName);
+        hasName = true;
+    }
+
+    if (hasName)
+    {
+        PrintCountLeaderLine(names, bestCount, metric);
+    }
+}
+
+void PrintCountLeaderLine(const char[] names, int bestCount, const char[] metric)
+{
+    PrintToChatAll("\x05本局%s最多：\x03%s\x01（\x03%d\x01 次）", metric, names, bestCount);
+}
+
+int GetFinisherKillCount(int client)
+{
+    return g_iHunterFinisherKills[client]
+        + g_iJockeyFinisherKills[client]
+        + g_iChargerFinisherKills[client];
+}
+
+int GetFinisherTargetKillCount(int client)
+{
+    return g_iHunterTargetKills[client]
+        + g_iJockeyTargetKills[client]
+        + g_iChargerTargetKills[client];
+}
+
+float GetFinisherRate(int client)
+{
+    int targetKills = GetFinisherTargetKillCount(client);
+    if (targetKills <= 0)
+    {
+        return 0.0;
+    }
+
+    return float(GetFinisherKillCount(client)) / float(targetKills);
+}
+
+int GetFinisherMinimumKills()
+{
+    int minimumKills = g_hFinisherMinKills.IntValue;
+    return minimumKills > 0 ? minimumKills : 1;
+}
+
+int FindBestFinisher(float required)
+{
+    int minimumKills = GetFinisherMinimumKills();
+    int best = 0;
+    float bestRate = -1.0;
+    int bestFinisherKills = -1;
+    int bestTargetKills = -1;
+
+    for (int client = 1; client <= MaxClients; client++)
+    {
+        if (!IsValidCandidate(client, required))
+        {
+            continue;
+        }
+
+        int targetKills = GetFinisherTargetKillCount(client);
+        if (targetKills <= 0 || targetKills < minimumKills)
+        {
+            continue;
+        }
+
+        int finisherKills = GetFinisherKillCount(client);
+        float rate = float(finisherKills) / float(targetKills);
+        bool isBetter = best == 0 || rate > bestRate + 0.0001;
+
+        if (!isBetter && FloatAbs(rate - bestRate) <= 0.0001)
+        {
+            isBetter = finisherKills > bestFinisherKills
+                || (finisherKills == bestFinisherKills && targetKills > bestTargetKills);
+        }
+
+        if (isBetter)
+        {
+            best = client;
+            bestRate = rate;
+            bestFinisherKills = finisherKills;
+            bestTargetKills = targetKills;
+        }
+    }
+
+    return best;
+}
+
+float GetHeadshotRate(int client)
+{
+    if (g_iSIKills[client] <= 0)
+    {
+        return 0.0;
+    }
+
+    return float(g_iSIHeadshotKills[client]) / float(g_iSIKills[client]);
+}
+
+int GetHeadshotMinimumKills()
+{
+    int minimumKills = g_hHeadshotMinKills.IntValue;
+    return minimumKills > 0 ? minimumKills : 1;
+}
+
+int FindBestHeadshot(float required)
+{
+    int minimumKills = GetHeadshotMinimumKills();
+    int best = 0;
+    float bestRate = -1.0;
+    int bestHeadshotKills = -1;
+    int bestSIKills = -1;
+
+    for (int client = 1; client <= MaxClients; client++)
+    {
+        if (!IsValidCandidate(client, required) || g_iSIKills[client] < minimumKills)
+        {
+            continue;
+        }
+
+        int headshotKills = g_iSIHeadshotKills[client];
+        int siKills = g_iSIKills[client];
+        float rate = float(headshotKills) / float(siKills);
+        bool isBetter = best == 0 || rate > bestRate + 0.0001;
+
+        if (!isBetter && FloatAbs(rate - bestRate) <= 0.0001)
+        {
+            isBetter = headshotKills > bestHeadshotKills
+                || (headshotKills == bestHeadshotKills && siKills > bestSIKills);
+        }
+
+        if (isBetter)
+        {
+            best = client;
+            bestRate = rate;
+            bestHeadshotKills = headshotKills;
+            bestSIKills = siKills;
+        }
+    }
+
+    return best;
+}
+
 float CalculateRoundScore(int client)
 {
     float score = g_hBaseScore.FloatValue;
@@ -1724,42 +2296,77 @@ float CalculateSkillBonus(int client)
 
 void UpdateRating(int client, float roundScore, float weightScale, float negativeWeightScale)
 {
-    if (!g_bLoaded[client])
+    if (!EnsurePlayerRatingLoaded(client))
     {
-        if (!IsFakeClient(client))
-        {
-            LoadPlayer(client);
-            if (!g_bLoaded[client])
-            {
-                return;
-            }
-        }
-        else
-        {
-            g_fRating[client] = g_hDefaultRating.FloatValue;
-            g_iValidRounds[client] = 0;
-            g_bLoaded[client] = true;
-        }
+        return;
     }
 
     float target = roundScore * 10.0;
-    float weight = g_hRatingWeight.FloatValue * ClampFloat(weightScale, 0.0, 1.0);
-    if (weight <= 0.0)
+    float baseWeight = g_hRatingWeight.FloatValue;
+    float effectiveScale = ClampFloat(weightScale, 0.0, 1.0);
+    if (baseWeight <= 0.0 || effectiveScale <= 0.0)
     {
         return;
     }
 
     if (target < g_fRating[client])
     {
-        weight *= ClampFloat(negativeWeightScale, 0.0, 1.0);
-        if (weight <= 0.0)
+        float protectedScale = ClampFloat(negativeWeightScale, 0.0, 1.0);
+        if (protectedScale < effectiveScale)
         {
-            return;
+            effectiveScale = protectedScale;
         }
     }
 
+    if (effectiveScale <= 0.0)
+    {
+        g_iValidRounds[client]++;
+        return;
+    }
+
+    float weight = baseWeight * effectiveScale;
     g_fRating[client] = (g_fRating[client] * (1.0 - weight)) + (target * weight);
     g_iValidRounds[client]++;
+}
+
+bool ShouldApplyAllNegativeGuard(const float roundScores[MAXPLAYERS + 1], float required, int scoreCount)
+{
+    if (!g_bRoundEndedByWin
+        || !g_hAllNegativeGuard.BoolValue
+        || g_hAllNegativeScale.FloatValue >= 0.999
+        || scoreCount < g_hAllNegativeMinPlayers.IntValue)
+    {
+        return false;
+    }
+
+    int checkedPlayers = 0;
+    for (int client = 1; client <= MaxClients; client++)
+    {
+        if (!IsValidCandidate(client, required))
+        {
+            continue;
+        }
+
+        if (!EnsurePlayerRatingLoaded(client))
+        {
+            return false;
+        }
+
+        float target = roundScores[client] * 10.0;
+        if (target >= g_fRating[client])
+        {
+            return false;
+        }
+
+        checkedPlayers++;
+    }
+
+    return checkedPlayers == scoreCount;
+}
+
+bool EnsurePlayerRatingLoaded(int client)
+{
+    return g_bLoaded[client] || LoadPlayer(client);
 }
 
 float GetWinLowScoreNegativeScale(float teamAverageScore)
@@ -2898,6 +3505,7 @@ void ClearClientRoundStats(int client)
     g_fSIDamage[client] = 0.0;
     g_fSIRawDamage[client] = 0.0;
     g_iSIKills[client] = 0;
+    g_iSIHeadshotKills[client] = 0;
     g_iCommonKills[client] = 0;
     g_iClears[client] = 0;
     g_iRevives[client] = 0;
@@ -2924,6 +3532,14 @@ void ClearClientRoundStats(int client)
     g_iLastFastClearPinner[client] = 0;
     g_iLastFastClearVictim[client] = 0;
     g_fLastFastClearAt[client] = 0.0;
+    g_iHunterFinisherKills[client] = 0;
+    g_iJockeyFinisherKills[client] = 0;
+    g_iChargerFinisherKills[client] = 0;
+    g_iHunterFinisherAssists[client] = 0;
+    g_iHunterTargetKills[client] = 0;
+    g_iJockeyTargetKills[client] = 0;
+    g_iChargerTargetKills[client] = 0;
+    ResetHunterAirKillTracking(client);
 
     for (int i = 1; i <= MaxClients; i++)
     {
@@ -2953,6 +3569,20 @@ void ClearClientRoundStats(int client)
     g_fFriendlyFire[client] = 0.0;
     ClearPendingInfectedDamage(client);
     ResetClientWeaponDecay(client);
+}
+
+void ResetHunterAirKillTracking(int hunter)
+{
+    if (hunter <= 0 || hunter > MaxClients)
+    {
+        return;
+    }
+
+    g_bHunterAirKillCounted[hunter] = false;
+    for (int assistant = 1; assistant <= MaxClients; assistant++)
+    {
+        g_bHunterAirKillAssistCounted[hunter][assistant] = false;
+    }
 }
 
 void ClearClientAll(int client)
