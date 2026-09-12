@@ -7,12 +7,33 @@
 #define MULTISI_PLUGIN_PRIMARY_NAME "specialspawner_fullslots"
 #define MULTISI_PLUGIN_LEGACY_FILE "specialspawner.smx"
 #define MULTISI_PLUGIN_LEGACY_NAME "specialspawner"
+#define MULTISI_STATE_ENABLED 1
+#define MULTISI_STATE_RETRIED 2
+#define SI_CLASS_COUNT 6
+
+static const char g_sSIClassConVars[SI_CLASS_COUNT][] = {
+    "ss_smoker_limit",
+    "ss_boomer_limit",
+    "ss_hunter_limit",
+    "ss_spitter_limit",
+    "ss_jockey_limit",
+    "ss_charger_limit"
+};
+
+static const char g_sSIClassNames[SI_CLASS_COUNT][] = {
+    "Smoker（舌头）",
+    "Boomer（胖子）",
+    "Hunter（猎人）",
+    "Spitter（口水）",
+    "Jockey（猴子）",
+    "Charger（牛）"
+};
 
 public Plugin myinfo = {
     name = "L4D2 Multi-Function X Menu",
     author = "らくらく安楽死 & night",
     description = "多功能控制菜单 (!x)",
-    version = "3.0",
+    version = "3.1.0-night",
 };
 
 bool g_bMultiSI_Enabled = false;
@@ -142,7 +163,50 @@ void SetMultiSIPluginState(bool enabled) {
         }
     }
     ServerExecute();
+}
+
+void ScheduleMultiSIStateCheck(bool enabled, bool retried = false) {
+    int stateData = enabled ? MULTISI_STATE_ENABLED : 0;
+    if (retried) {
+        stateData |= MULTISI_STATE_RETRIED;
+    }
+
+    CreateTimer(retried ? 0.5 : 0.3, Timer_ConfirmMultiSIState, stateData, TIMER_FLAG_NO_MAPCHANGE);
+}
+
+public Action Timer_ConfirmMultiSIState(Handle timer, any stateData) {
+    bool enabled = (stateData & MULTISI_STATE_ENABLED) != 0;
+    bool retried = (stateData & MULTISI_STATE_RETRIED) != 0;
+
+    // 新投票已经改变目标状态时，丢弃旧确认，避免过期 Timer 误报。
+    if (enabled != g_bSavedToggleState) {
+        return Plugin_Stop;
+    }
+
     UpdateCurrentState();
+    if (g_bMultiSI_Enabled == enabled) {
+        if (enabled) {
+            CreateTimer(0.2, Timer_EnforceCvars, _, TIMER_FLAG_NO_MAPCHANGE);
+            CreateTimer(0.5, Timer_BroadcastState_All, _, TIMER_FLAG_NO_MAPCHANGE);
+        } else {
+            PrintToChatAll("\x04[系统]\x01 多特模式已关闭，交还系统导演控制。");
+        }
+        return Plugin_Stop;
+    }
+
+    if (!retried) {
+        SetMultiSIPluginState(enabled);
+        ScheduleMultiSIStateCheck(enabled, true);
+        return Plugin_Stop;
+    }
+
+    if (enabled) {
+        g_bHasVotedToggle = false;
+        PrintToChatAll("\x04[系统]\x01 多特插件加载失败，请管理员检查 \x05%s\x01。", MULTISI_PLUGIN_PRIMARY_FILE);
+    } else {
+        PrintToChatAll("\x04[系统]\x01 多特插件卸载失败，请管理员检查插件状态。");
+    }
+    return Plugin_Stop;
 }
 
 void PrintCurrentState(int client) {
@@ -199,6 +263,7 @@ void ShowMenu_Level2_SI(int client) {
     
     if (g_bMultiSI_Enabled) {
         menu.AddItem("limit", "基础特感数量");
+        menu.AddItem("class_limits", "各类特感上限");
         menu.AddItem("time", "刷特时间");
     }
     
@@ -213,6 +278,7 @@ public int MenuHandler_Level2_SI(Menu menu, MenuAction action, int param1, int p
         
         if (strcmp(info, "toggle") == 0) ShowMenu_Level3_Toggle(param1);
         else if (strcmp(info, "limit") == 0) ShowMenu_Level3_Limit(param1);
+        else if (strcmp(info, "class_limits") == 0) ShowMenu_Level3_ClassLimits(param1);
         else if (strcmp(info, "time") == 0) ShowMenu_Level3_Time(param1);
     }
     else if (action == MenuAction_Cancel && param2 == MenuCancel_ExitBack) {
@@ -300,6 +366,134 @@ public int MenuHandler_Level3_Limit(Menu menu, MenuAction action, int param1, in
     return 0;
 }
 
+void ShowMenu_Level3_ClassLimits(int client) {
+    UpdateCurrentState();
+    if (!g_bMultiSI_Enabled) {
+        PrintToChat(client, "\x04[提示]\x01 多特插件未运行，无法调整各类特感上限。");
+        ShowMenu_Level2_SI(client);
+        return;
+    }
+
+    Menu menu = new Menu(MenuHandler_Level3_ClassLimits);
+    menu.SetTitle("★ 各类特感上限 ★\n修改后立即生效，无需投票\n-------------------");
+
+    for (int i = 0; i < SI_CLASS_COUNT; i++) {
+        char info[32], display[64];
+        ConVar classLimit = FindConVar(g_sSIClassConVars[i]);
+        Format(info, sizeof(info), "%d", i);
+
+        if (classLimit != null) {
+            Format(display, sizeof(display), "%s：%d", g_sSIClassNames[i], classLimit.IntValue);
+            menu.AddItem(info, display);
+        } else {
+            Format(display, sizeof(display), "%s：不可用", g_sSIClassNames[i]);
+            menu.AddItem(info, display, ITEMDRAW_DISABLED);
+        }
+    }
+
+    menu.ExitBackButton = true;
+    menu.Display(client, MENU_TIME_FOREVER);
+}
+
+public int MenuHandler_Level3_ClassLimits(Menu menu, MenuAction action, int param1, int param2) {
+    if (action == MenuAction_Select) {
+        char info[32];
+        menu.GetItem(param2, info, sizeof(info));
+        ShowMenu_Level4_ClassLimit(param1, StringToInt(info));
+    }
+    else if (action == MenuAction_Cancel && param2 == MenuCancel_ExitBack) {
+        ShowMenu_Level2_SI(param1);
+    }
+    else if (action == MenuAction_End) {
+        delete menu;
+    }
+    return 0;
+}
+
+void ShowMenu_Level4_ClassLimit(int client, int classIndex) {
+    if (classIndex < 0 || classIndex >= SI_CLASS_COUNT) {
+        ShowMenu_Level3_ClassLimits(client);
+        return;
+    }
+
+    ConVar classLimit = FindConVar(g_sSIClassConVars[classIndex]);
+    if (classLimit == null) {
+        PrintToChat(client, "\x04[提示]\x01 找不到配置项 \x05%s\x01。", g_sSIClassConVars[classIndex]);
+        ShowMenu_Level3_ClassLimits(client);
+        return;
+    }
+
+    Menu menu = new Menu(MenuHandler_Level4_ClassLimit);
+    menu.SetTitle("★ %s 上限 ★\n当前：%d；0 表示禁止生成\n-------------------",
+        g_sSIClassNames[classIndex], classLimit.IntValue);
+
+    for (int limit = 0; limit <= 15; limit++) {
+        char info[32], display[32];
+        Format(info, sizeof(info), "%d|%d", classIndex, limit);
+        Format(display, sizeof(display), "[%s] %d", classLimit.IntValue == limit ? "✓" : "  ", limit);
+        menu.AddItem(info, display);
+    }
+
+    menu.ExitBackButton = true;
+    menu.Display(client, MENU_TIME_FOREVER);
+}
+
+public int MenuHandler_Level4_ClassLimit(Menu menu, MenuAction action, int param1, int param2) {
+    if (action == MenuAction_Select) {
+        char info[32], data[2][16];
+        menu.GetItem(param2, info, sizeof(info));
+        ExplodeString(info, "|", data, sizeof(data), sizeof(data[]));
+
+        int classIndex = StringToInt(data[0]);
+        int selectedLimit = StringToInt(data[1]);
+        SetSIClassLimit(param1, classIndex, selectedLimit);
+        ShowMenu_Level3_ClassLimits(param1);
+    }
+    else if (action == MenuAction_Cancel && param2 == MenuCancel_ExitBack) {
+        ShowMenu_Level3_ClassLimits(param1);
+    }
+    else if (action == MenuAction_End) {
+        delete menu;
+    }
+    return 0;
+}
+
+void SetSIClassLimit(int client, int classIndex, int selectedLimit) {
+    if (classIndex < 0 || classIndex >= SI_CLASS_COUNT || selectedLimit < 0 || selectedLimit > 15) {
+        PrintToChat(client, "\x04[提示]\x01 无效的特感上限设置。");
+        return;
+    }
+
+    ConVar classLimit = FindConVar(g_sSIClassConVars[classIndex]);
+    if (classLimit == null) {
+        PrintToChat(client, "\x04[提示]\x01 找不到配置项 \x05%s\x01。", g_sSIClassConVars[classIndex]);
+        return;
+    }
+
+    int oldLimit = classLimit.IntValue;
+    if (oldLimit == selectedLimit) {
+        return;
+    }
+
+    classLimit.IntValue = selectedLimit;
+    PrintToChatAll("\x04[系统]\x01 玩家 \x03%N\x01 将 \x05%s\x01 上限从 \x05%d\x01 调整为 \x05%d\x01。",
+        client, g_sSIClassNames[classIndex], oldLimit, selectedLimit);
+
+    if (AreAllSIClassLimitsZero()) {
+        PrintToChatAll("\x04[系统]\x01 六类特感上限均为 \x050\x01，普通特感将暂停生成。");
+    }
+}
+
+bool AreAllSIClassLimitsZero() {
+    for (int i = 0; i < SI_CLASS_COUNT; i++) {
+        ConVar classLimit = FindConVar(g_sSIClassConVars[i]);
+        if (classLimit == null || classLimit.IntValue != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void ShowMenu_Level3_Time(int client) {
     UpdateCurrentState();
     Menu menu = new Menu(MenuHandler_Level3_Time);
@@ -383,26 +577,10 @@ void ExecuteXAction(const char[] sInfo) {
 
     if (strcmp(sData[0], "toggle") == 0) {
         g_bHasVotedToggle = true; 
-        if (strcmp(sData[1], "on") == 0) {
-            g_bSavedToggleState = true;
-            SetMultiSIPluginState(true);
-            if (!g_bMultiSI_Enabled) {
-                g_bHasVotedToggle = false;
-                PrintToChatAll("\x04[系统]\x01 多特插件加载失败，请管理员检查 \x05%s\x01。", MULTISI_PLUGIN_PRIMARY_FILE);
-                return;
-            }
-            CreateTimer(0.5, Timer_EnforceCvars, _, TIMER_FLAG_NO_MAPCHANGE);
-            CreateTimer(0.8, Timer_BroadcastState_All, _, TIMER_FLAG_NO_MAPCHANGE);
-        } else {
-            g_bSavedToggleState = false;
-            SetMultiSIPluginState(false);
-            if (!g_bMultiSI_Enabled) {
-                PrintToChatAll("\x04[系统]\x01 多特模式已关闭，交还系统导演控制。");
-            } else {
-                PrintToChatAll("\x04[系统]\x01 多特插件卸载失败，请管理员检查插件状态。");
-            }
-            return; 
-        }
+        g_bSavedToggleState = strcmp(sData[1], "on") == 0;
+        SetMultiSIPluginState(g_bSavedToggleState);
+        ScheduleMultiSIStateCheck(g_bSavedToggleState);
+        return;
     }
     else if (strcmp(sData[0], "limit") == 0) {
         g_bHasVotedLimit = true; 

@@ -6,10 +6,27 @@
 #include <left4dhooks>
 #include <l4d2_nativevote>
 
-#define PLUGIN_VERSION "1.2.0"
+#define PLUGIN_VERSION "1.4.0-night"
 #define SAMPLE_COUNT 5
 #define TEAM_SURVIVOR 2
 #define SETUP_RETRY_LOG_INTERVAL 30
+#define STARTER_WEAPON_COUNT 4
+
+static const char g_sStarterWeaponClassnames[STARTER_WEAPON_COUNT][] =
+{
+	"weapon_pumpshotgun",
+	"weapon_shotgun_chrome",
+	"weapon_smg",
+	"weapon_smg_silenced"
+};
+
+static const char g_sStarterWeaponNames[STARTER_WEAPON_COUNT][] =
+{
+	"木喷",
+	"铁喷",
+	"UZI",
+	"消音冲锋枪"
+};
 
 enum AssistVote
 {
@@ -37,9 +54,11 @@ ConVar g_cvFallbackInvalidWipes;
 ConVar g_cvFallbackTier1Wipes;
 ConVar g_cvVoteTime;
 ConVar g_cvReviveHealth;
+ConVar g_cvWeaponOfferDelay;
 
 Handle g_hFlowTimer;
 Handle g_hRoundSetupTimer;
+Handle g_hWeaponOfferTimer;
 
 bool g_bRoundActive;
 bool g_bMissionLostHandled;
@@ -55,7 +74,9 @@ bool g_bTier2TargetValid;
 bool g_bTier2Triggered;
 bool g_bMapFlowDisabled;
 bool g_bFlowFallbackActive;
+bool g_bWeaponOfferScheduled;
 bool g_bVoteClientVoted[MAXPLAYERS + 1];
+bool g_bStarterWeaponClaimed[MAXPLAYERS + 1];
 bool g_bRecentWipeValid[SAMPLE_COUNT];
 
 int g_iRoundSerial;
@@ -110,7 +131,7 @@ public void OnPluginStart()
 	);
 	g_cvTier1Wipes = CreateConVar(
 		"l4d2_flow_difficulty_tier1_wipes",
-		"3",
+		"2",
 		"触发第一阶减难投票所需的早期团灭次数。",
 		FCVAR_NOTIFY,
 		true,
@@ -118,7 +139,7 @@ public void OnPluginStart()
 	);
 	g_cvTier2Wipes = CreateConVar(
 		"l4d2_flow_difficulty_tier2_wipes",
-		"7",
+		"5",
 		"触发第二阶减难投票所需的总团灭次数。",
 		FCVAR_NOTIFY,
 		true,
@@ -126,8 +147,8 @@ public void OnPluginStart()
 	);
 	g_cvTier3Wipes = CreateConVar(
 		"l4d2_flow_difficulty_tier3_wipes",
-		"10",
-		"触发第三阶随机药品投票所需的总团灭次数。",
+		"7",
+		"触发第三阶满血复活投票所需的总团灭次数。",
 		FCVAR_NOTIFY,
 		true,
 		1.0
@@ -172,6 +193,16 @@ public void OnPluginStart()
 		true,
 		100.0
 	);
+	g_cvWeaponOfferDelay = CreateConVar(
+		"l4d2_flow_difficulty_weapon_offer_delay",
+		"30.0",
+		"每回合开始多少秒后，为没有主武器的存活真人显示随机基础主武器领取菜单。",
+		FCVAR_NOTIFY,
+		true,
+		0.0,
+		true,
+		300.0
+	);
 
 	CreateConVar(
 		"l4d2_flow_difficulty_version",
@@ -180,8 +211,8 @@ public void OnPluginStart()
 		FCVAR_NOTIFY | FCVAR_DONTRECORD
 	);
 
-	RegAdminCmd("sm_flowassist_status", Command_Status, ADMFLAG_GENERIC, "查看动态减难状态。");
-	RegAdminCmd("sm_fd", Command_Status, ADMFLAG_GENERIC, "查看动态减难状态（简写）。");
+	RegConsoleCmd("sm_flowassist_status", Command_Status, "查看动态减难状态。");
+	RegConsoleCmd("sm_fd", Command_Status, "查看动态减难状态（简写）。");
 	RegAdminCmd("sm_flowassist_reset", Command_Reset, ADMFLAG_ROOT, "清空当前章节的动态减难状态。");
 
 	HookEvent("round_start", Event_RoundStart, EventHookMode_PostNoCopy);
@@ -208,6 +239,9 @@ public void OnMapEnd()
 
 	delete g_hRoundSetupTimer;
 	g_hRoundSetupTimer = null;
+
+	delete g_hWeaponOfferTimer;
+	g_hWeaponOfferTimer = null;
 }
 
 public void OnConfigsExecuted()
@@ -230,6 +264,7 @@ void ResetChapterState(const char[] reason)
 	g_bTier2TargetValid = false;
 	g_bTier2Triggered = false;
 	g_bFlowFallbackActive = false;
+	g_bWeaponOfferScheduled = false;
 	g_iTotalWipes = 0;
 	g_iEarlyWipes = 0;
 	g_iWipeSampleCount = 0;
@@ -254,10 +289,14 @@ void ResetChapterState(const char[] reason)
 	for (int client = 1; client <= MaxClients; client++)
 	{
 		g_bVoteClientVoted[client] = false;
+		g_bStarterWeaponClaimed[client] = false;
 	}
 
 	delete g_hRoundSetupTimer;
 	g_hRoundSetupTimer = null;
+
+	delete g_hWeaponOfferTimer;
+	g_hWeaponOfferTimer = null;
 }
 
 public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
@@ -273,6 +312,7 @@ public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
 	g_bMissionLostHandled = false;
 	g_bAttemptFlowValid = false;
 	g_bTier2Triggered = false;
+	g_bWeaponOfferScheduled = false;
 	g_fAttemptMaxPercent = 0.0;
 	g_bTier2TargetValid = g_bTier2Enabled && !g_bFlowFallbackActive && CalculateWipeAverage(g_fTier2Target);
 
@@ -283,6 +323,15 @@ public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
 		g_iRoundSerial,
 		TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE
 	);
+
+	delete g_hWeaponOfferTimer;
+	g_hWeaponOfferTimer = null;
+	for (int client = 1; client <= MaxClients; client++)
+	{
+		g_bStarterWeaponClaimed[client] = false;
+	}
+
+	ScheduleStarterWeaponOffer();
 }
 
 public void Event_MissionLost(Event event, const char[] name, bool dontBroadcast)
@@ -293,6 +342,9 @@ public void Event_MissionLost(Event event, const char[] name, bool dontBroadcast
 	}
 
 	g_bMissionLostHandled = true;
+	delete g_hWeaponOfferTimer;
+	g_hWeaponOfferTimer = null;
+	g_bWeaponOfferScheduled = false;
 	float finalPercent;
 	UpdateAttemptFlowSample(finalPercent);
 	g_bRoundActive = false;
@@ -457,18 +509,15 @@ public Action Timer_TrackFlow(Handle timer)
 	if (g_bTier2Enabled && !g_bFlowFallbackActive && g_bTier2TargetValid && !g_bTier2Triggered && percent >= g_fTier2Target)
 	{
 		g_bTier2Triggered = true;
-		int medicinesGiven;
-		int revived = ReviveDeadHumanSurvivors(g_bTier3Enabled, medicinesGiven);
+		int revived = ReviveDeadHumanSurvivors(g_bTier3Enabled);
 
 		if (revived > 0)
 		{
 			if (g_bTier3Enabled)
 			{
 				PrintToChatAll(
-					"\x04[动态减难]\x05 已到达最近五次平均团灭路程 \x03%.1f%%\x05，复活了 \x03%d\x05 名死亡真人，并为 \x03%d/%d\x05 名发放随机药品。",
+					"\x04[动态减难]\x05 已到达最近五次平均团灭路程 \x03%.1f%%\x05，满血复活了 \x03%d\x05 名死亡真人。",
 					g_fTier2Target,
-					revived,
-					medicinesGiven,
 					revived
 				);
 			}
@@ -488,6 +537,123 @@ public Action Timer_TrackFlow(Handle timer)
 	}
 
 	return Plugin_Continue;
+}
+
+void ScheduleStarterWeaponOffer()
+{
+	if (g_bWeaponOfferScheduled)
+	{
+		return;
+	}
+
+	g_bWeaponOfferScheduled = true;
+	delete g_hWeaponOfferTimer;
+	g_hWeaponOfferTimer = CreateTimer(
+		g_cvWeaponOfferDelay.FloatValue,
+		Timer_OfferStarterWeapons,
+		g_iRoundSerial,
+		TIMER_FLAG_NO_MAPCHANGE
+	);
+}
+
+public Action Timer_OfferStarterWeapons(Handle timer, any serial)
+{
+	if (timer == g_hWeaponOfferTimer)
+	{
+		g_hWeaponOfferTimer = null;
+	}
+
+	if (serial != g_iRoundSerial || !g_cvEnable.BoolValue || !g_bRoundActive)
+	{
+		return Plugin_Stop;
+	}
+
+	for (int client = 1; client <= MaxClients; client++)
+	{
+		if (!IsClientInGame(client) || IsFakeClient(client) || GetClientTeam(client) != TEAM_SURVIVOR
+			|| !IsPlayerAlive(client) || g_bStarterWeaponClaimed[client] || GetPlayerWeaponSlot(client, 0) != -1)
+		{
+			continue;
+		}
+
+		ShowStarterWeaponOffer(client, serial);
+	}
+
+	return Plugin_Stop;
+}
+
+void ShowStarterWeaponOffer(int client, int serial)
+{
+	Menu menu = new Menu(MenuHandler_StarterWeaponOffer);
+	menu.SetTitle("你当前没有主武器\n是否领取一把随机基础主武器？");
+
+	char info[32];
+	FormatEx(info, sizeof(info), "accept|%d", serial);
+	menu.AddItem(info, "接受");
+	menu.AddItem("decline", "不接受");
+	menu.ExitButton = false;
+	menu.Display(client, 15);
+}
+
+public int MenuHandler_StarterWeaponOffer(Menu menu, MenuAction action, int param1, int param2)
+{
+	if (action == MenuAction_Select)
+	{
+		char info[32];
+		menu.GetItem(param2, info, sizeof(info));
+		if (strncmp(info, "accept|", 7, false) == 0)
+		{
+			char data[2][16];
+			ExplodeString(info, "|", data, sizeof(data), sizeof(data[]));
+			GiveRandomStarterWeapon(param1, StringToInt(data[1]));
+		}
+	}
+	else if (action == MenuAction_End)
+	{
+		delete menu;
+	}
+	return 0;
+}
+
+void GiveRandomStarterWeapon(int client, int serial)
+{
+	if (serial != g_iRoundSerial || !g_bRoundActive || !g_cvEnable.BoolValue)
+	{
+		PrintToChat(client, "\x04[动态减难]\x05 本次武器领取菜单已经过期。");
+		return;
+	}
+	if (!IsClientInGame(client) || IsFakeClient(client) || GetClientTeam(client) != TEAM_SURVIVOR || !IsPlayerAlive(client))
+	{
+		return;
+	}
+	if (g_bStarterWeaponClaimed[client])
+	{
+		PrintToChat(client, "\x04[动态减难]\x05 本回合已经领取过随机主武器。");
+		return;
+	}
+	if (GetPlayerWeaponSlot(client, 0) != -1)
+	{
+		PrintToChat(client, "\x04[动态减难]\x05 你已经拥有主武器，本次不再发放。");
+		return;
+	}
+
+	int weaponIndex = GetRandomInt(0, STARTER_WEAPON_COUNT - 1);
+	int weapon = GivePlayerItem(client, g_sStarterWeaponClassnames[weaponIndex]);
+	if (weapon == -1)
+	{
+		PrintToChat(client, "\x04[动态减难]\x05 随机主武器发放失败，请联系管理员。");
+		LogError("无法为玩家 %N 发放随机主武器 %s。", client, g_sStarterWeaponClassnames[weaponIndex]);
+		return;
+	}
+
+	EquipPlayerWeapon(client, weapon);
+	g_bStarterWeaponClaimed[client] = true;
+	PrintToChat(client, "\x04[动态减难]\x05 已领取随机主武器：\x03%s\x05。", g_sStarterWeaponNames[weaponIndex]);
+}
+
+public void OnClientDisconnect(int client)
+{
+	g_bStarterWeaponClaimed[client] = false;
 }
 
 bool UpdateAttemptFlowSample(float &percent)
@@ -625,7 +791,7 @@ bool HandlePendingVote()
 	}
 	else
 	{
-		vote.SetTitle("继续多次团灭，开启第三阶复活药品？");
+		vote.SetTitle("继续多次团灭，开启第三阶满血复活？");
 	}
 
 	g_eActiveVote = voteType;
@@ -722,11 +888,11 @@ void VoteHandler_Assistance(L4D2NativeVote vote, VoteAction action, int param1, 
 					PrintToChatAll("\x04[动态减难]\x05 第二阶已开启，但有效团灭路程不足 5 次，本回合不会复活。");
 				}
 			}
-			else if (voteType == AssistVote_Tier3)
-			{
-				vote.SetPass("第三阶减难已开启");
-				g_bTier3Enabled = true;
-				PrintToChatAll("\x04[动态减难]\x05 第三阶已开启：后续路程复活的死亡真人会随机获得止痛药或肾上腺素。");
+		else if (voteType == AssistVote_Tier3)
+		{
+			vote.SetPass("第三阶减难已开启");
+			g_bTier3Enabled = true;
+			PrintToChatAll("\x04[动态减难]\x05 第三阶已开启：后续路程复活的死亡真人将以满血状态复活。");
 			}
 
 			g_eActiveVote = AssistVote_None;
@@ -851,9 +1017,8 @@ bool CalculateWipeAverage(float &average)
 	return average >= 0.0 && average <= 100.0;
 }
 
-int ReviveDeadHumanSurvivors(bool giveMedicine, int &medicinesGiven)
+int ReviveDeadHumanSurvivors(bool fullHealth)
 {
-	medicinesGiven = 0;
 	int anchors[MAXPLAYERS];
 	int anchorCount = 0;
 
@@ -890,7 +1055,7 @@ int ReviveDeadHumanSurvivors(bool giveMedicine, int &medicinesGiven)
 
 		TeleportEntity(client, position, NULL_VECTOR, NULL_VECTOR);
 		L4D_WarpToValidPositionIfStuck(client);
-		SetEntityHealth(client, g_cvReviveHealth.IntValue);
+		SetEntityHealth(client, fullHealth ? 100 : g_cvReviveHealth.IntValue);
 		SetEntPropFloat(client, Prop_Send, "m_healthBuffer", 0.0);
 		SetEntPropFloat(client, Prop_Send, "m_healthBufferTime", GetGameTime());
 
@@ -902,47 +1067,10 @@ int ReviveDeadHumanSurvivors(bool giveMedicine, int &medicinesGiven)
 		{
 			SetEntProp(client, Prop_Send, "m_isGoingToDie", 0);
 		}
-		if (giveMedicine && GiveRandomMedicine(client))
-		{
-			medicinesGiven++;
-		}
 		revived++;
 	}
 
 	return revived;
-}
-
-bool GiveRandomMedicine(int client)
-{
-	char classname[32];
-	if (GetRandomInt(0, 1) == 0)
-	{
-		strcopy(classname, sizeof(classname), "weapon_pain_pills");
-	}
-	else
-	{
-		strcopy(classname, sizeof(classname), "weapon_adrenaline");
-	}
-
-	if (GivePlayerItem(client, classname) != -1)
-	{
-		return true;
-	}
-
-	int entity = CreateEntityByName(classname);
-	if (entity == -1)
-	{
-		LogError("无法为复活玩家 %N 创建随机药品 %s。", client, classname);
-		return false;
-	}
-
-	float position[3];
-	GetClientAbsOrigin(client, position);
-	position[2] += 12.0;
-	DispatchSpawn(entity);
-	TeleportEntity(entity, position, NULL_VECTOR, NULL_VECTOR);
-	LogMessage("无法把随机药品 %s 直接放入玩家 %N 的物品栏，已生成在脚下。", classname, client);
-	return true;
 }
 
 int CountHumanSurvivors()
@@ -1053,31 +1181,13 @@ void LoadMapFlowConfig()
 
 public Action Command_Status(int client, int args)
 {
-	char currentAttempt[32];
-	if (g_bAttemptFlowValid)
-	{
-		FormatEx(currentAttempt, sizeof(currentAttempt), "%.1f%%", g_fAttemptMaxPercent);
-	}
-	else if (g_bMapFlowDisabled)
-	{
-		strcopy(currentAttempt, sizeof(currentAttempt), "地图禁用");
-	}
-	else if (g_bRoundActive)
-	{
-		strcopy(currentAttempt, sizeof(currentAttempt), "等待导航数据");
-	}
-	else
-	{
-		strcopy(currentAttempt, sizeof(currentAttempt), "无效");
-	}
-
 	char recentWipes[96];
 	FormatRecentWipes(recentWipes, sizeof(recentWipes));
 
 	char target[32];
 	if (g_bFlowFallbackActive)
 	{
-		strcopy(target, sizeof(target), "导航备用模式暂停");
+		strcopy(target, sizeof(target), "暂停");
 	}
 	else if (g_bTier2TargetValid)
 	{
@@ -1085,33 +1195,33 @@ public Action Command_Status(int client, int args)
 	}
 	else
 	{
-		strcopy(target, sizeof(target), "无");
+		strcopy(target, sizeof(target), "暂无");
 	}
 
 	char voteState[96];
 	if (g_eActiveVote == AssistVote_Tier1)
 	{
-		FormatEx(voteState, sizeof(voteState), "第一阶投票中 %d/%d", g_iReceivedVotes, g_iExpectedVoters);
+		FormatEx(voteState, sizeof(voteState), "第一阶进行中 %d/%d", g_iReceivedVotes, g_iExpectedVoters);
 	}
 	else if (g_eActiveVote == AssistVote_Tier2)
 	{
-		FormatEx(voteState, sizeof(voteState), "第二阶投票中 %d/%d", g_iReceivedVotes, g_iExpectedVoters);
+		FormatEx(voteState, sizeof(voteState), "第二阶进行中 %d/%d", g_iReceivedVotes, g_iExpectedVoters);
 	}
 	else if (g_eActiveVote == AssistVote_Tier3)
 	{
-		FormatEx(voteState, sizeof(voteState), "第三阶投票中 %d/%d", g_iReceivedVotes, g_iExpectedVoters);
+		FormatEx(voteState, sizeof(voteState), "第三阶进行中 %d/%d", g_iReceivedVotes, g_iExpectedVoters);
 	}
 	else if (g_bTier1VotePending)
 	{
-		strcopy(voteState, sizeof(voteState), "第一阶投票等待下一回合或投票空档");
+		strcopy(voteState, sizeof(voteState), "第一阶等待");
 	}
 	else if (g_bTier2VotePending && !g_bFlowFallbackActive)
 	{
-		strcopy(voteState, sizeof(voteState), "第二阶投票等待下一回合或投票空档");
+		strcopy(voteState, sizeof(voteState), "第二阶等待");
 	}
 	else if (g_bTier3VotePending && !g_bFlowFallbackActive)
 	{
-		strcopy(voteState, sizeof(voteState), "第三阶投票等待下一回合或投票空档");
+		strcopy(voteState, sizeof(voteState), "第三阶等待");
 	}
 	else
 	{
@@ -1168,13 +1278,37 @@ public Action Command_Status(int client, int args)
 		strcopy(nextStep, sizeof(nextStep), "第一、二、三阶均已开启");
 	}
 
-	ReplyToCommand(client, "[动态减难] 版本:%s 状态:%s 当前尝试:%s", PLUGIN_VERSION, g_cvEnable.BoolValue ? "开" : "关", currentAttempt);
-	ReplyToCommand(client, "[动态减难] 总团灭:%d %.0f%%前团灭:%d/%d 连续无效:%d/%d", g_iTotalWipes, g_cvEarlyPercent.FloatValue, g_iEarlyWipes, g_cvTier1Wipes.IntValue, g_iConsecutiveInvalidWipes, g_cvFallbackInvalidWipes.IntValue);
-	ReplyToCommand(client, "[动态减难] 最近5次:%s 第二阶有效样本:%d/5", recentWipes, g_iWipeSampleCount);
-	ReplyToCommand(client, "[动态减难] 第一阶:%s 第二阶:%s 第三阶:%s 导航备用:%s 复活点:%s", g_bTier1Enabled ? "开" : "关", g_bTier2Enabled ? "开" : "关", g_bTier3Enabled ? "开" : "关", g_bFlowFallbackActive ? "开" : "关", target);
-	ReplyToCommand(client, "[动态减难] 下一步:%s 投票:%s", nextStep, voteState);
-	ReplyToCommand(client, "[动态减难] 上次团灭:%s 上次重置:%s", g_sLastWipeReason, g_sLastResetReason);
-	ReplyToCommand(client, "[动态减难] 地图路程:%s 最大路程覆盖:%.1f", g_bMapFlowDisabled ? "禁用" : "启用", g_fMapMaxFlowOverride);
+	char stageState[64];
+	if (g_bTier3Enabled)
+	{
+		strcopy(stageState, sizeof(stageState), "第三阶（满血复活）");
+	}
+	else if (g_bTier2Enabled)
+	{
+		strcopy(stageState, sizeof(stageState), "第二阶（路程复活）");
+	}
+	else if (g_bTier1Enabled)
+	{
+		strcopy(stageState, sizeof(stageState), "第一阶（开局止痛药）");
+	}
+	else
+	{
+		strcopy(stageState, sizeof(stageState), "未开启");
+	}
+
+	char fallbackState[32];
+	if (g_bMapFlowDisabled)
+	{
+		strcopy(fallbackState, sizeof(fallbackState), "地图禁用");
+	}
+	else
+	{
+		strcopy(fallbackState, sizeof(fallbackState), g_bFlowFallbackActive ? "开启" : "关闭");
+	}
+
+	ReplyToCommand(client, "[动态减难] 团灭:%d | %.0f%%前:%d/%d | 最近5次:%s", g_iTotalWipes, g_cvEarlyPercent.FloatValue, g_iEarlyWipes, g_cvTier1Wipes.IntValue, recentWipes);
+	ReplyToCommand(client, "[动态减难] 阶段:%s | 下一步:%s | 复活目标:%s", stageState, nextStep, target);
+	ReplyToCommand(client, "[动态减难] 投票:%s | 导航备用:%s", voteState, fallbackState);
 	return Plugin_Handled;
 }
 

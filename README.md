@@ -14,7 +14,7 @@
 | [抽象操作通报](<original_plugins/抽象操作通报插件/>) | 通报炸队友、多撞、Witch 责任和高额友伤等操作 | night / 1.1.0 |
 | [胆汁砸队友](<original_plugins/胆汁砸队友/>) | 胆汁瓶爆炸时使附近队友受到胆汁效果 | night / 1.0.0 |
 | [动态调整子弹上限](<original_plugins/动态调整子弹上限（协同specialspawner插件）/>) | 根据特感数量动态调整备弹上限 | morzlee、night / 1.1.0 |
-| [根据路程动态减难](<original_plugins/根据路程动态减难插件/>) | 根据团灭次数和路程投票开启止痛药、路程复活和复活药品 | night / 1.2.0 |
+| [根据路程动态减难](<original_plugins/根据路程动态减难插件/>) | 根据团灭次数和路程分阶减难，并为无主武器玩家提供开局援助 | night / 1.4.0-night |
 | [满槽稳定多特感](<original_plugins/满槽稳定多特感插件/>) | 满槽时停止无效特感创建，并在槽位释放后恢复补刷 | Tordecybombo、breezy、night / 1.3.10-night |
 | [多特经验分](<original_plugins/服务器经验分插件/>) | 计算回合表现、长期经验分、技巧统计和个人排名 | night / 1.10.6 |
 | [服务器增加难度](<original_plugins/服务器增加难度插件/>) | 集中控制 Tank、特感、推击、起身和石头等难度选项 | Visor、A1m、Forgetest、CanadaRox、night / 4.4.0 |
@@ -34,7 +34,7 @@
 | [禁止速砍](<collected_plugins/禁止速砍/>) | 修复快速切换武器绕过近战攻击间隔 | sheo / 2.3 |
 | [命中反馈分支](<collected_plugins/命中反馈分支1.1.5(反馈声音玩家自选)/>) | 提供可由玩家选择的击中与击杀反馈 | TsukasaSato、Hesh233 / 1.1.5+ |
 | [舌头拖拽伤害](<collected_plugins/舌头拖拽伤害/>) | Smoker 拖拽生还者时持续造成伤害 | Silvers / 未注明 |
-| [刷特感控制菜单](<collected_plugins/刷特感插件控制插件/>) | 通过投票控制多特开关、数量和刷新间隔 | らくらく安楽死、night / 3.0 |
+| [刷特感控制菜单](<collected_plugins/刷特感插件控制插件/>) | 控制多特开关、数量、刷新间隔和六类特感上限 | らくらく安楽死、night / 3.1.0-night |
 | [针药缓慢回血](<collected_plugins/药改为缓慢回血(可在源码内调整回复量和速度)/>) | 将止痛药和肾上腺素改为分段恢复 | ProdigySim、CircleSquared、Forgetest / 2.4 |
 | [脏话和谐](<collected_plugins/脏话和谐插件/>) | 按规则替换聊天中的指定词语或整句内容 | Seiunsky Maomao / 1.1 |
 | [All4Dead 2](<collected_plugins/all4dead/>) | 通过管理菜单控制导演并生成实体 | grandwazir、HarryPotter / 未注明 |
