@@ -18,11 +18,11 @@
 ## 注意事项
 
 - 长期数据保存在 `addons/sourcemod/data/l4d2_multisi_exp.txt`。
-- Hunter 空爆次数需要配套 `l4d2_stats 1.2.3-night`，其他技巧分需要 `l4d2_skill_detect` 提供数据。
+- Hunter 空爆次数需要配套 `l4d2_stats 1.2.4-night`，其他技巧分需要 `l4d2_skill_detect 0.9.23-night` 提供数据。
 - 特感和 Tank 原始伤害按实际生命扣除记录，可兼容空爆强制击杀和 AI Charger 冲锋伤害修正。
 - 受限枪械进入衰减和降至零倍率时会私聊提醒；默认至少恢复到阈值以下 `20` 秒才允许重新提醒。
 - 成功过关且所有有效玩家原本都会掉长期经验时，会触发可配置的全队掉分保护。
-- 绝杀率统计需要 `l4d2_stats 1.2.3-night`、`l4d2_skill_detect 0.9.22-night` 和带 `OnJockeySkeet` 回调的 `l4d2_jockey_skeet.smx`。Hunter 空中击杀与聊天播报使用同一口径，归最后一击者；其他伤害参与者记录辅助绝杀。
+- 绝杀率统计需要 `l4d2_stats 1.2.4-night`、`l4d2_skill_detect 0.9.23-night` 和带 `OnJockeySkeet` 回调的 `l4d2_jockey_skeet.smx`。Hunter 空中击杀与聊天播报使用同一口径，归最后一击者；其他伤害参与者记录辅助绝杀。
 - 爆头率仅统计六类普通特感的爆头击杀与总击杀，不统计小僵尸、Tank 或 Witch，也不参与评分。
 - 成功过关或团灭结算时，会播报本关秒救队友次数最多的玩家；并列最高者会合并到同一行显示。
 - 成功过关或团灭结算时，也会播报 Hunter 辅助绝杀次数最多的玩家；并列姓名合并显示，辅助绝杀只展示、不参与评分。
