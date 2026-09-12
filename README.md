@@ -15,7 +15,7 @@
 | [胆汁砸队友](<original_plugins/胆汁砸队友/>) | 胆汁瓶爆炸时使附近队友受到胆汁效果 | night / 1.0.0 |
 | [动态调整子弹上限](<original_plugins/动态调整子弹上限（协同specialspawner插件）/>) | 根据特感数量动态调整备弹上限 | morzlee、night / 1.1.0 |
 | [根据路程动态减难](<original_plugins/根据路程动态减难插件/>) | 根据团灭次数和路程分阶减难，并为无主武器玩家提供开局援助 | night / 1.4.0-night |
-| [满槽稳定多特感](<original_plugins/满槽稳定多特感插件/>) | 满槽时停止无效特感创建，并在槽位释放后恢复补刷 | Tordecybombo、breezy、night / 1.3.10-night |
+| [满槽稳定多特感](<original_plugins/满槽稳定多特感插件/>) | 满槽时停止无效特感创建，并在槽位释放后恢复补刷 | Tordecybombo、breezy、night / 1.3.11-night |
 | [多特经验分](<original_plugins/服务器经验分插件/>) | 计算回合表现、长期经验分、技巧统计和个人排名 | night / 1.10.6 |
 | [服务器增加难度](<original_plugins/服务器增加难度插件/>) | 集中控制 Tank、特感、推击、起身和石头等难度选项 | Visor、A1m、Forgetest、CanadaRox、night / 4.4.0 |
 | [开局随机近战](<original_plugins/开局随机生成两把近战/>) | 回合开始时生成一把或两把随机近战武器 | N3wton、night / 1.1.0 |

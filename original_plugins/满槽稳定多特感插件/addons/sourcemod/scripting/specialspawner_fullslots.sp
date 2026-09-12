@@ -131,6 +131,7 @@ int
 	g_iSpawnCounts[SI_MAX_SIZE],
 	g_iBaseLimit,
 	g_iBaseSize,
+	g_iRetrySpawnSize,
 	g_iCurrentClass = -1;
 
 bool
@@ -138,13 +139,14 @@ bool
 	g_bInSpawnTime,
 	g_bScaleWeights,
 	g_bLeftSafeArea,
-	g_bFinaleStarted;
+	g_bFinaleStarted,
+	g_bRoundEndHandled;
 
 public Plugin myinfo = {
 	name = "Special Spawner - Full Slots",
 	author = "Tordecybombo, breezy, night",
 	description = "Special infected spawning with full-slot retry protection",
-	version = "1.3.10-night",
+	version = "1.3.11-night",
 };
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) {
@@ -374,14 +376,15 @@ void KillInactiveSI(int client) {
 	PrintToServer("[SS] Kill inactive SI -> %N", client);
 	#endif
 	ForcePlayerSuicide(client);
-	ScheduleRetrySpawn(1.0, true);
+	ScheduleRetrySpawn(1.0, 0);
 }
 
-void ScheduleRetrySpawn(float delay, bool retry) {
+void ScheduleRetrySpawn(float delay, int spawnSize) {
 	if (!g_bLeftSafeArea || g_hRetryTimer)
 		return;
 
-	g_hRetryTimer = CreateTimer(delay, tmrRetrySpawn, retry, TIMER_FLAG_NO_MAPCHANGE);
+	g_iRetrySpawnSize = spawnSize;
+	g_hRetryTimer = CreateTimer(delay, tmrRetrySpawn, _, TIMER_FLAG_NO_MAPCHANGE);
 }
 
 int GetSurVictim(int client, int class) {
@@ -754,6 +757,14 @@ public void OnClientDisconnect(int client) {
 }
 
 public void OnMapEnd() {
+	EndRoundState();
+}
+
+void EndRoundState() {
+	if (g_bRoundEndHandled)
+		return;
+
+	g_bRoundEndHandled = true;
 	g_bLeftSafeArea = false;
 	g_bFinaleStarted = false;
 
@@ -769,10 +780,11 @@ public void OnMapEnd() {
 }
 
 void Event_RoundEnd(Event event, const char[] name, bool dontBroadcast) {
-	OnMapEnd();
+	EndRoundState();
 }
 
 void Event_RoundStart(Event event, const char[] name, bool dontBroadcast) {
+	g_bRoundEndHandled = false;
 	g_bLeftSafeArea = false;
 	EndSpawnTimer();
 	delete g_hSuicideTimer;
@@ -843,6 +855,9 @@ void SetSpawnCount() {
 
 	g_cSILimit.IntValue = limit;
 	g_cSpawnSize.IntValue = spawnSize;
+	if (g_iCurrentClass >= 0)
+		g_cSpawnLimits[g_iCurrentClass % SI_MAX_SIZE].IntValue = limit;
+
 	PrintToChatAll("\x01[\x05%d特\x01/\x05次\x01] \x05%d特 \x01[\x03%.1f\x01~\x03%.1f\x01]\x04秒", spawnSize <= limit ? spawnSize : limit, limit, g_fSpawnTimeMin, g_fSpawnTimeMax);
 }
 
@@ -998,6 +1013,7 @@ void StartSpawnTimer() {
 void EndSpawnTimer() {
 	delete g_hSpawnTimer;
 	delete g_hRetryTimer;
+	g_iRetrySpawnSize = 0;
 }
 
 Action tmrSpawnSpecial(Handle timer) { 
@@ -1005,36 +1021,43 @@ Action tmrSpawnSpecial(Handle timer) {
 	delete g_hRetryTimer;
 
 	int totalSI = GetTotalSI();
-	ExecuteSpawnQueue(totalSI, true);
+	ExecuteSpawnQueue(totalSI, 0, true, false);
 
 	g_hSpawnTimer = CreateTimer(g_iSpawnTimeMode > 0 ? g_fSpawnTimes[totalSI] : Math_GetRandomFloat(g_fSpawnTimeMin, g_fSpawnTimeMax), tmrSpawnSpecial);
 	return Plugin_Continue;
 }
 
-void ExecuteSpawnQueue(int totalSI, bool retry) {
+void ExecuteSpawnQueue(int totalSI, int requestedSize, bool allowRetry, bool isRetryAttempt) {
 	if (totalSI >= g_iSILimit)
 		return;
 
-	int freeSlots = MaxClients - GetClientCount(false);
-	if (freeSlots <= 0)
+	int allowedSI = g_iSILimit - totalSI;
+	int targetSize = requestedSize > 0 ? requestedSize : g_iSpawnSize;
+	if (targetSize > allowedSI)
+		targetSize = allowedSI;
+
+	if (targetSize <= 0)
 		return;
+
+	int freeSlots = MaxClients - GetClientCount(false);
+	if (freeSlots <= 0) {
+		if (allowRetry && HasPendingClientKick())
+			ScheduleRetrySpawn(1.0, targetSize);
+
+		return;
+	}
 
 	#if BENCHMARK
 	g_profiler = new Profiler();
 	g_profiler.Start();
 	#endif
 
-	int allowedSI = g_iSILimit - totalSI;
-	int spawnSize = g_iSpawnSize > allowedSI ? allowedSI : g_iSpawnSize;
-	if (spawnSize > freeSlots)
-		spawnSize = freeSlots;
-
 	GetSITypeCount();
 
 	int i;
 	int index;
 	ArrayList aQueue = new ArrayList();
-	for (; i < spawnSize; i++) {
+	for (; i < targetSize; i++) {
 		index = GenerateIndex();
 		if (index == -1)
 			break;
@@ -1043,11 +1066,13 @@ void ExecuteSpawnQueue(int totalSI, bool retry) {
 		g_iSpawnCounts[index]++;
 	}
 
-	spawnSize = aQueue.Length;
-	if (!spawnSize) {
+	int queuedSize = aQueue.Length;
+	if (!queuedSize) {
 		delete aQueue;
 		return;
 	}
+
+	int attemptSize = queuedSize > freeSlots ? freeSlots : queuedSize;
 
 	float flow;
 	ArrayList aList = new ArrayList(2);
@@ -1083,12 +1108,12 @@ void ExecuteSpawnQueue(int totalSI, bool retry) {
 	delete aList;
 	g_bInSpawnTime = true;
 	//g_cSpawnRange.IntValue = retry ? 1000 : 1500;
-	g_iDirection = g_bFinaleStarted ? SPAWN_NEAR_IT_VICTIM : (!retry ? SPAWN_NO_PREFERENCE : (!find ? SPAWN_LARGE_VOLUME/*SPAWN_SPECIALS_ANYWHERE*/ : SPAWN_IN_FRONT_OF_SURVIVORS));
+	g_iDirection = g_bFinaleStarted ? SPAWN_NEAR_IT_VICTIM : (isRetryAttempt ? SPAWN_NO_PREFERENCE : (!find ? SPAWN_LARGE_VOLUME/*SPAWN_SPECIALS_ANYWHERE*/ : SPAWN_IN_FRONT_OF_SURVIVORS));
 
 	count = 0;
 	int zombie;
 	float vPos[3];
-	for (i = 0; i < spawnSize; i++) {
+	for (i = 0; i < attemptSize; i++) {
 		index = aQueue.Get(i) + 1;
 		bool found = L4D_GetRandomPZSpawnPosition(client, index, 10, vPos);
 		if (!found)
@@ -1111,28 +1136,39 @@ void ExecuteSpawnQueue(int totalSI, bool retry) {
 	PrintToServer("[SS] ProfilerTime: %f", g_profiler.Time);
 	#endif
 
-	if (retry) {
-		if (!count && MaxClients - GetClientCount(false) > 0) {
-			#if DEBUG
-			PrintToServer("[SS] Retry spawn SI! spawned:%d failed:%d", count, aQueue.Length - count);
-			#endif
-			ScheduleRetrySpawn(1.0, false);
-		}
+	int retrySize = attemptSize - count;
+	if (HasPendingClientKick() && queuedSize > count)
+		retrySize = queuedSize - count;
+
+	if (allowRetry && retrySize > 0) {
+		#if DEBUG
+		PrintToServer("[SS] Retry missing SI! spawned:%d missing:%d", count, retrySize);
+		#endif
+		ScheduleRetrySpawn(1.0, retrySize);
 	}
 	#if DEBUG
-	else {
-		if (!count)
-			PrintToServer("[SS] Spawn SI failed! spawned:%d failed:%d", count, aQueue.Length - count);
-	}
+	else if (isRetryAttempt && !count)
+		PrintToServer("[SS] Retry spawn SI failed! requested:%d", requestedSize);
 	#endif
 
 	delete aQueue;
 }
 
-Action tmrRetrySpawn(Handle timer, bool retry) {
+Action tmrRetrySpawn(Handle timer) {
 	g_hRetryTimer = null;
-	ExecuteSpawnQueue(GetTotalSI(), retry);
+	int spawnSize = g_iRetrySpawnSize;
+	g_iRetrySpawnSize = 0;
+	ExecuteSpawnQueue(GetTotalSI(), spawnSize, false, true);
 	return Plugin_Continue;
+}
+
+bool HasPendingClientKick() {
+	for (int i = 1; i <= MaxClients; i++) {
+		if (IsClientConnected(i) && IsClientInKickQueue(i))
+			return true;
+	}
+
+	return false;
 }
 
 int GetTotalSI() {
@@ -1198,6 +1234,9 @@ int GenerateIndex() {
 		tempWeights[i] = g_iSpawnCounts[i] < g_iSpawnLimits[i] ? (g_bScaleWeights ? ((g_iSpawnLimits[i] - g_iSpawnCounts[i]) * g_iSpawnWeights[i]) : g_iSpawnWeights[i]) : 0;
 		totalWeight += tempWeights[i];
 	}
+
+	if (totalWeight <= 0)
+		return -1;
 
 	unit = 1.0 / totalWeight;
 	for (i = 0; i < SI_MAX_SIZE; i++) {
