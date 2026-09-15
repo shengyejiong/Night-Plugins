@@ -6,11 +6,13 @@
 #include <left4dhooks>
 #include <l4d2_nativevote>
 
-#define PLUGIN_VERSION "1.4.0-night"
+#define PLUGIN_VERSION "1.4.1-night"
 #define SAMPLE_COUNT 5
 #define TEAM_SURVIVOR 2
 #define SETUP_RETRY_LOG_INTERVAL 30
 #define STARTER_WEAPON_COUNT 4
+#define STARTER_WEAPON_RECHECK_INTERVAL 1.0
+#define STARTER_WEAPON_RECHECK_WINDOW 20.0
 
 static const char g_sStarterWeaponClassnames[STARTER_WEAPON_COUNT][] =
 {
@@ -77,6 +79,7 @@ bool g_bFlowFallbackActive;
 bool g_bWeaponOfferScheduled;
 bool g_bVoteClientVoted[MAXPLAYERS + 1];
 bool g_bStarterWeaponClaimed[MAXPLAYERS + 1];
+bool g_bStarterWeaponOfferHandled[MAXPLAYERS + 1];
 bool g_bRecentWipeValid[SAMPLE_COUNT];
 
 int g_iRoundSerial;
@@ -96,6 +99,7 @@ float g_fWipeSamples[SAMPLE_COUNT];
 float g_fRecentWipePercents[SAMPLE_COUNT];
 float g_fTier2Target;
 float g_fMapMaxFlowOverride;
+float g_fStarterWeaponRecheckEndTime;
 
 char g_sLastWipeReason[96];
 char g_sLastResetReason[64];
@@ -276,6 +280,7 @@ void ResetChapterState(const char[] reason)
 	g_iReceivedVotes = 0;
 	g_fAttemptMaxPercent = 0.0;
 	g_fTier2Target = 0.0;
+	g_fStarterWeaponRecheckEndTime = 0.0;
 	g_eActiveVote = AssistVote_None;
 	strcopy(g_sLastWipeReason, sizeof(g_sLastWipeReason), "尚无团灭记录");
 	strcopy(g_sLastResetReason, sizeof(g_sLastResetReason), reason);
@@ -290,6 +295,7 @@ void ResetChapterState(const char[] reason)
 	{
 		g_bVoteClientVoted[client] = false;
 		g_bStarterWeaponClaimed[client] = false;
+		g_bStarterWeaponOfferHandled[client] = false;
 	}
 
 	delete g_hRoundSetupTimer;
@@ -329,6 +335,7 @@ public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
 	for (int client = 1; client <= MaxClients; client++)
 	{
 		g_bStarterWeaponClaimed[client] = false;
+		g_bStarterWeaponOfferHandled[client] = false;
 	}
 
 	ScheduleStarterWeaponOffer();
@@ -345,6 +352,7 @@ public void Event_MissionLost(Event event, const char[] name, bool dontBroadcast
 	delete g_hWeaponOfferTimer;
 	g_hWeaponOfferTimer = null;
 	g_bWeaponOfferScheduled = false;
+	g_fStarterWeaponRecheckEndTime = 0.0;
 	float finalPercent;
 	UpdateAttemptFlowSample(finalPercent);
 	g_bRoundActive = false;
@@ -568,21 +576,58 @@ public Action Timer_OfferStarterWeapons(Handle timer, any serial)
 		return Plugin_Stop;
 	}
 
-	for (int client = 1; client <= MaxClients; client++)
-	{
-		if (!IsClientInGame(client) || IsFakeClient(client) || GetClientTeam(client) != TEAM_SURVIVOR
-			|| !IsPlayerAlive(client) || g_bStarterWeaponClaimed[client] || GetPlayerWeaponSlot(client, 0) != -1)
-		{
-			continue;
-		}
-
-		ShowStarterWeaponOffer(client, serial);
-	}
+	g_fStarterWeaponRecheckEndTime = GetGameTime() + STARTER_WEAPON_RECHECK_WINDOW;
+	CheckStarterWeaponOffers(serial);
+	g_hWeaponOfferTimer = CreateTimer(
+		STARTER_WEAPON_RECHECK_INTERVAL,
+		Timer_RecheckStarterWeapons,
+		serial,
+		TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE
+	);
 
 	return Plugin_Stop;
 }
 
-void ShowStarterWeaponOffer(int client, int serial)
+public Action Timer_RecheckStarterWeapons(Handle timer, any serial)
+{
+	if (serial != g_iRoundSerial || !g_cvEnable.BoolValue || !g_bRoundActive
+		|| GetGameTime() >= g_fStarterWeaponRecheckEndTime)
+	{
+		if (timer == g_hWeaponOfferTimer)
+		{
+			g_hWeaponOfferTimer = null;
+		}
+		return Plugin_Stop;
+	}
+
+	CheckStarterWeaponOffers(serial);
+	return Plugin_Continue;
+}
+
+void CheckStarterWeaponOffers(int serial)
+{
+	for (int client = 1; client <= MaxClients; client++)
+	{
+		if (g_bStarterWeaponOfferHandled[client] || !IsClientInGame(client) || IsFakeClient(client)
+			|| GetClientTeam(client) != TEAM_SURVIVOR || !IsPlayerAlive(client))
+		{
+			continue;
+		}
+
+		if (g_bStarterWeaponClaimed[client] || GetPlayerWeaponSlot(client, 0) != -1)
+		{
+			g_bStarterWeaponOfferHandled[client] = true;
+			continue;
+		}
+
+		if (ShowStarterWeaponOffer(client, serial))
+		{
+			g_bStarterWeaponOfferHandled[client] = true;
+		}
+	}
+}
+
+bool ShowStarterWeaponOffer(int client, int serial)
 {
 	Menu menu = new Menu(MenuHandler_StarterWeaponOffer);
 	menu.SetTitle("你当前没有主武器\n是否领取一把随机基础主武器？");
@@ -592,7 +637,13 @@ void ShowStarterWeaponOffer(int client, int serial)
 	menu.AddItem(info, "接受");
 	menu.AddItem("decline", "不接受");
 	menu.ExitButton = false;
-	menu.Display(client, 15);
+	if (!menu.Display(client, 15))
+	{
+		delete menu;
+		return false;
+	}
+
+	return true;
 }
 
 public int MenuHandler_StarterWeaponOffer(Menu menu, MenuAction action, int param1, int param2)
@@ -654,6 +705,7 @@ void GiveRandomStarterWeapon(int client, int serial)
 public void OnClientDisconnect(int client)
 {
 	g_bStarterWeaponClaimed[client] = false;
+	g_bStarterWeaponOfferHandled[client] = false;
 }
 
 bool UpdateAttemptFlowSample(float &percent)
