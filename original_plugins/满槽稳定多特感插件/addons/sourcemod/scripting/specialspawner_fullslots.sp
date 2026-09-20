@@ -53,6 +53,8 @@ ConVar
 	g_cExtraLimit,
 	g_cBaseSize,
 	g_cExtraSize,
+	g_cSpawnSizeHighThreshold,
+	g_cSpawnSizeHighStep,
 	g_cTankStatusAction,
 	g_cTankStatusLimits,
 	g_cTankStatusWeights,
@@ -131,6 +133,8 @@ int
 	g_iSpawnCounts[SI_MAX_SIZE],
 	g_iBaseLimit,
 	g_iBaseSize,
+	g_iSpawnSizeHighThreshold,
+	g_iSpawnSizeHighStep,
 	g_iRetrySpawnSize,
 	g_iCurrentClass = -1;
 
@@ -146,7 +150,7 @@ public Plugin myinfo = {
 	name = "Special Spawner - Full Slots",
 	author = "Tordecybombo, breezy, night",
 	description = "Special infected spawning with full-slot retry protection",
-	version = "1.3.11-night",
+	version = "1.3.12-night",
 };
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) {
@@ -179,6 +183,8 @@ public void OnPluginStart() {
 	g_cExtraLimit =					CreateConVar("ss_extra_limit",			"1",						"生还者团队每增加一人可增加多少个特感", _, true, 0.0, true, 32.0);
 	g_cBaseSize =					CreateConVar("ss_base_size",			"4",						"生还者团队不超过4人时一次产生多少只特感", _, true, 0.0, true, 32.0);
 	g_cExtraSize =					CreateConVar("ss_extra_size",			"1",						"生还者团队每增加多少玩家人一次多产生一只特感", _, true, 1.0, true, 32.0);
+	g_cSpawnSizeHighThreshold =	CreateConVar("ss_spawn_size_high_threshold", "8",					"生还者总人数超过此值后，单批数量改用高人数成长间隔", _, true, 4.0, true, 32.0);
+	g_cSpawnSizeHighStep =		CreateConVar("ss_spawn_size_high_step",	 "2",					"超过高人数阈值后，每增加多少名生还者，单批数量增加一只", _, true, 1.0, true, 32.0);
 	g_cTankStatusAction =			CreateConVar("ss_tankstatus_action",	"1",						"坦克产生后是否对当前刷特参数进行修改, 坦克死完后恢复?[0 = 忽略(保持原有的刷特状态) | 1 = 自定义]", _, true, 0.0, true, 1.0);
 	g_cTankStatusLimits =			CreateConVar("ss_tankstatus_limits",	"2;1;4;1;4;4",				"坦克产生后每种特感数量的自定义参数");
 	g_cTankStatusWeights =			CreateConVar("ss_tankstatus_weights",	"100;400;100;200;100;100",	"坦克产生后每种特感比重的自定义参数");
@@ -210,6 +216,8 @@ public void OnPluginStart() {
 	g_cExtraLimit.AddChangeHook(CvarChanged_General);
 	g_cBaseSize.AddChangeHook(CvarChanged_General);
 	g_cExtraSize.AddChangeHook(CvarChanged_General);
+	g_cSpawnSizeHighThreshold.AddChangeHook(CvarChanged_General);
+	g_cSpawnSizeHighStep.AddChangeHook(CvarChanged_General);
 	g_cSuicideTime.AddChangeHook(CvarChanged_General);
 	g_cRushDistance.AddChangeHook(CvarChanged_General);
 	g_cFirstSpawnTime.AddChangeHook(CvarChanged_General);
@@ -690,6 +698,8 @@ void GetCvars_General() {
 	g_fExtraLimit =		g_cExtraLimit.FloatValue;
 	g_iBaseSize =		g_cBaseSize.IntValue;
 	g_fExtraSize =		g_cExtraSize.FloatValue;
+	g_iSpawnSizeHighThreshold = g_cSpawnSizeHighThreshold.IntValue;
+	g_iSpawnSizeHighStep = g_cSpawnSizeHighStep.IntValue;
 	g_fSuicideTime =	g_cSuicideTime.FloatValue;
 	g_fRushDistance =	g_cRushDistance.FloatValue;
 	g_fFirstSpawnTime =	g_cFirstSpawnTime.FloatValue;
@@ -832,22 +842,22 @@ Action tmrUpdate(Handle timer) {
 }
 
 void SetSpawnCount() {
-	int count;
+	int survivorCount;
 	int limit;
 	int spawnSize;
 	for (int i = 1; i <= MaxClients; i++) {
 		if (IsClientInGame(i) && GetClientTeam(i) == 2)
-			count++;
+			survivorCount++;
 	}
 
-	count -= 4;
-	if (count < 1) {
+	int extraPlayers = survivorCount - 4;
+	if (extraPlayers < 1) {
 		limit = g_iBaseLimit;
 		spawnSize = g_iBaseSize;
 	}
 	else {
-		limit = g_iBaseLimit + RoundToNearest(g_fExtraLimit * count);
-		spawnSize = g_iBaseSize + RoundToNearest(count / g_fExtraSize);
+		limit = g_iBaseLimit + RoundToNearest(g_fExtraLimit * extraPlayers);
+		spawnSize = CalculateSpawnSize(survivorCount);
 	}
 
 	if (limit == g_iSILimit && spawnSize == g_iSpawnSize)
@@ -859,6 +869,20 @@ void SetSpawnCount() {
 		g_cSpawnLimits[g_iCurrentClass % SI_MAX_SIZE].IntValue = limit;
 
 	PrintToChatAll("\x01[\x05%d特\x01/\x05次\x01] \x05%d特 \x01[\x03%.1f\x01~\x03%.1f\x01]\x04秒", spawnSize <= limit ? spawnSize : limit, limit, g_fSpawnTimeMin, g_fSpawnTimeMax);
+}
+
+int CalculateSpawnSize(int survivorCount) {
+	int extraPlayers = survivorCount - 4;
+	if (extraPlayers < 1)
+		return g_iBaseSize;
+
+	if (survivorCount <= g_iSpawnSizeHighThreshold)
+		return g_iBaseSize + RoundToNearest(extraPlayers / g_fExtraSize);
+
+	int normalExtraPlayers = g_iSpawnSizeHighThreshold - 4;
+	int spawnSize = g_iBaseSize + RoundToNearest(normalExtraPlayers / g_fExtraSize);
+	int highExtraPlayers = survivorCount - g_iSpawnSizeHighThreshold;
+	return spawnSize + highExtraPlayers / g_iSpawnSizeHighStep;
 }
 
 void Event_PlayerSpawn(Event event, const char[] name, bool dontBroadcast) {
