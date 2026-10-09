@@ -28,6 +28,7 @@
 | [友伤过高封禁](<original_plugins/友伤过高踢出/>) | 统计站立生还者受到的友伤，达到阈值后临时封禁非管理员 | night / 1.2.0 |
 | [HUD 增加弹量显示](<original_plugins/hud增加显示弹量（基于豆瓣酱插件包）/>) | 在 HUD 中显示弹药等状态 | 豆瓣酱な、sorallll、らくらく安楽死、night / 2.21.31 |
 | [安全门标记](<original_plugins/安全门标记/>) | 为本回合尚未打开的复活房门添加轮廓高亮 | OpenAI / ChatGPT / 0.2.0 |
+| [安全区标记](<original_plugins/安全区标记/>) | 沿开局安全区外围显示清道夫风格白色斜纹边界 | OpenAI / ChatGPT / 0.4.1 |
 
 ## 收集插件
 
@@ -62,6 +63,7 @@
 | [坦克打铁训练](<original_plugins/坦克打铁训练/>) | `!tanktraining`、`!hittable`、`!tk` |
 | [HUD 增加弹量显示](<original_plugins/hud增加显示弹量（基于豆瓣酱插件包）/>) | `!hud` |
 | [安全门标记](<original_plugins/安全门标记/>) | `sm_rdm_rescan`（控制台） |
+| [安全区标记](<original_plugins/安全区标记/>) | `sm_ssam_rescan`、`sm_ssam_hide`（控制台） |
 | [命中反馈分支](<collected_plugins/命中反馈分支1.1.5(反馈声音玩家自选)/>) | `!snd` |
 | [刷特感控制菜单](<collected_plugins/刷特感插件控制插件/>) | `!x` |
 | [脏话和谐](<collected_plugins/脏话和谐插件/>) | `!bszh_reload` |
