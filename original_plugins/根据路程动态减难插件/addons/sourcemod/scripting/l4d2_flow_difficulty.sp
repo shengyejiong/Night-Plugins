@@ -4,18 +4,20 @@
 #include <sourcemod>
 #include <sdktools>
 #include <left4dhooks>
-#include <l4d2_nativevote>
 
-#define PLUGIN_VERSION "1.4.4-night"
+#define PLUGIN_VERSION "1.8.2-night"
 #define SAMPLE_COUNT 5
 #define TEAM_SURVIVOR 2
 #define SETUP_RETRY_LOG_INTERVAL 30
-#define STARTER_WEAPON_COUNT 4
+#define STARTER_WEAPON_COUNT 5
+#define ASSIST_VOTE_PASS_PERCENT 60.0
+#define REVIVE_SUPPLY_COUNT 4
 
 static const char g_sStarterWeaponClassnames[STARTER_WEAPON_COUNT][] =
 {
 	"weapon_pumpshotgun",
 	"weapon_shotgun_chrome",
+	"weapon_sniper_scout",
 	"weapon_smg",
 	"weapon_smg_silenced"
 };
@@ -24,8 +26,25 @@ static const char g_sStarterWeaponNames[STARTER_WEAPON_COUNT][] =
 {
 	"木喷",
 	"铁喷",
+	"鸟狙",
 	"UZI",
 	"消音冲锋枪"
+};
+
+static const char g_sReviveSupplyClassnames[REVIVE_SUPPLY_COUNT][] =
+{
+	"weapon_pain_pills",
+	"weapon_adrenaline",
+	"weapon_first_aid_kit",
+	"weapon_defibrillator"
+};
+
+static const char g_sReviveSupplyNames[REVIVE_SUPPLY_COUNT][] =
+{
+	"止痛药",
+	"肾上腺素",
+	"医疗包",
+	"除颤器"
 };
 
 enum AssistVote
@@ -33,7 +52,17 @@ enum AssistVote
 	AssistVote_None = 0,
 	AssistVote_Tier1,
 	AssistVote_Tier2,
-	AssistVote_Tier3
+	AssistVote_Tier3,
+	AssistVote_Tier4,
+	AssistVote_Tier5
+};
+
+enum AssistVoteChoice
+{
+	AssistVoteChoice_None = 0,
+	AssistVoteChoice_Yes,
+	AssistVoteChoice_No,
+	AssistVoteChoice_Abstain
 };
 
 public Plugin myinfo =
@@ -50,15 +79,19 @@ ConVar g_cvEarlyPercent;
 ConVar g_cvTier1Wipes;
 ConVar g_cvTier2Wipes;
 ConVar g_cvTier3Wipes;
+ConVar g_cvTier4Wipes;
+ConVar g_cvTier5Wipes;
 ConVar g_cvFallbackInvalidWipes;
 ConVar g_cvFallbackTier1Wipes;
 ConVar g_cvVoteTime;
 ConVar g_cvReviveHealth;
 ConVar g_cvAmmoShotgunMax;
+ConVar g_cvAmmoSniperMax;
 ConVar g_cvAmmoSmgMax;
 
 Handle g_hFlowTimer;
 Handle g_hRoundSetupTimer;
+Handle g_hAssistVoteTimer;
 
 bool g_bRoundActive;
 bool g_bMissionLostHandled;
@@ -66,15 +99,24 @@ bool g_bAttemptFlowValid;
 bool g_bTier1Enabled;
 bool g_bTier2Enabled;
 bool g_bTier3Enabled;
+bool g_bTier4Enabled;
+bool g_bTier5Enabled;
 bool g_bTier1VotePending;
 bool g_bTier2VotePending;
 bool g_bTier3VotePending;
+bool g_bTier4VotePending;
+bool g_bTier5VotePending;
 bool g_bPillsPending;
 bool g_bTier2TargetValid;
 bool g_bTier2Triggered;
+bool g_bTier5Triggered;
+bool g_bTier2TargetManual;
+bool g_bTier2RoundNoticeSent;
+bool g_bTier2NearNoticeSent;
 bool g_bMapFlowDisabled;
 bool g_bFlowFallbackActive;
 bool g_bVoteClientVoted[MAXPLAYERS + 1];
+bool g_bVoteClientAdmin[MAXPLAYERS + 1];
 bool g_bStarterWeaponClaimed[MAXPLAYERS + 1];
 bool g_bStarterWeaponMenuOpen[MAXPLAYERS + 1];
 bool g_bRecentWipeValid[SAMPLE_COUNT];
@@ -82,6 +124,7 @@ bool g_bRecentWipeValid[SAMPLE_COUNT];
 int g_iRoundSerial;
 int g_iSetupRetries;
 int g_iTotalWipes;
+int g_iWipeProgressOffset;
 int g_iEarlyWipes;
 int g_iWipeSampleCount;
 int g_iWipeSampleNext;
@@ -90,18 +133,25 @@ int g_iRecentWipeNext;
 int g_iConsecutiveInvalidWipes;
 int g_iExpectedVoters;
 int g_iReceivedVotes;
+int g_iAssistVoteSerial;
+int g_iAssistVoteYes;
+int g_iAssistVoteNo;
+int g_iAssistVoteAbstain;
+AssistVoteChoice g_eVoteChoices[MAXPLAYERS + 1];
 int g_iStarterWeaponMenuSerial[MAXPLAYERS + 1];
 
 float g_fAttemptMaxPercent;
 float g_fWipeSamples[SAMPLE_COUNT];
 float g_fRecentWipePercents[SAMPLE_COUNT];
 float g_fTier2Target;
+float g_fTier2ManualTarget;
 float g_fMapMaxFlowOverride;
 
 char g_sLastWipeReason[96];
 char g_sLastResetReason[64];
 
 AssistVote g_eActiveVote = AssistVote_None;
+AssistVote g_eManualVoteTarget = AssistVote_None;
 
 public void OnPluginStart()
 {
@@ -154,6 +204,22 @@ public void OnPluginStart()
 		true,
 		1.0
 	);
+	g_cvTier4Wipes = CreateConVar(
+		"l4d2_flow_difficulty_tier4_wipes",
+		"9",
+		"触发第四阶复活医疗物资投票所需的总团灭次数。",
+		FCVAR_NOTIFY,
+		true,
+		1.0
+	);
+	g_cvTier5Wipes = CreateConVar(
+		"l4d2_flow_difficulty_tier5_wipes",
+		"11",
+		"触发第五阶孤立生还者复活投票所需的总团灭次数。",
+		FCVAR_NOTIFY,
+		true,
+		1.0
+	);
 	g_cvFallbackInvalidWipes = CreateConVar(
 		"l4d2_flow_difficulty_fallback_invalid_wipes",
 		"3",
@@ -177,7 +243,7 @@ public void OnPluginStart()
 	g_cvVoteTime = CreateConVar(
 		"l4d2_flow_difficulty_vote_time",
 		"25",
-		"每次减难投票持续时间，单位为秒。所有投票开始时在线的真人都投票才有效。",
+		"每次减难投票持续时间，单位为秒；弃权不计入同意率分母。",
 		FCVAR_NOTIFY,
 		true,
 		5.0,
@@ -195,6 +261,7 @@ public void OnPluginStart()
 		100.0
 	);
 	g_cvAmmoShotgunMax = FindConVar("ammo_shotgun_max");
+	g_cvAmmoSniperMax = FindConVar("ammo_sniperrifle_max");
 	g_cvAmmoSmgMax = FindConVar("ammo_smg_max");
 
 	CreateConVar(
@@ -206,6 +273,10 @@ public void OnPluginStart()
 
 	RegConsoleCmd("sm_flowassist_status", Command_Status, "查看动态减难状态。");
 	RegConsoleCmd("sm_fd", Command_Status, "查看动态减难状态（简写）。");
+	RegConsoleCmd("sm_flowassist", Command_OpenAssistStageMenu, "打开主动减难阶段投票菜单。");
+	RegConsoleCmd("sm_flowassist_vote", Command_OpenAssistStageMenu, "打开主动减难阶段投票菜单（完整指令）。");
+	RegConsoleCmd("sm_fa", Command_OpenAssistStageMenu, "打开主动减难阶段投票菜单（简写）。");
+	RegConsoleCmd("sm_fr", Command_SetReviveFlow, "设置当前回合复活路程百分比。");
 	RegConsoleCmd("sm_gun", Command_StarterWeaponMenu, "打开随机基础主武器领取菜单。");
 	RegConsoleCmd("sm_sg", Command_StarterWeaponMenu, "打开随机基础主武器领取菜单（简写）。");
 	RegAdminCmd("sm_flowassist_reset", Command_Reset, ADMFLAG_ROOT, "清空当前章节的动态减难状态。");
@@ -234,6 +305,9 @@ public void OnMapEnd()
 
 	delete g_hRoundSetupTimer;
 	g_hRoundSetupTimer = null;
+
+	delete g_hAssistVoteTimer;
+	g_hAssistVoteTimer = null;
 }
 
 public void OnConfigsExecuted()
@@ -249,14 +323,23 @@ void ResetChapterState(const char[] reason)
 	g_bTier1Enabled = false;
 	g_bTier2Enabled = false;
 	g_bTier3Enabled = false;
+	g_bTier4Enabled = false;
+	g_bTier5Enabled = false;
 	g_bTier1VotePending = false;
 	g_bTier2VotePending = false;
 	g_bTier3VotePending = false;
+	g_bTier4VotePending = false;
+	g_bTier5VotePending = false;
 	g_bPillsPending = false;
 	g_bTier2TargetValid = false;
 	g_bTier2Triggered = false;
+	g_bTier5Triggered = false;
+	g_bTier2TargetManual = false;
+	g_bTier2RoundNoticeSent = false;
+	g_bTier2NearNoticeSent = false;
 	g_bFlowFallbackActive = false;
 	g_iTotalWipes = 0;
+	g_iWipeProgressOffset = 0;
 	g_iEarlyWipes = 0;
 	g_iWipeSampleCount = 0;
 	g_iWipeSampleNext = 0;
@@ -265,9 +348,14 @@ void ResetChapterState(const char[] reason)
 	g_iConsecutiveInvalidWipes = 0;
 	g_iExpectedVoters = 0;
 	g_iReceivedVotes = 0;
+	g_iAssistVoteYes = 0;
+	g_iAssistVoteNo = 0;
+	g_iAssistVoteAbstain = 0;
 	g_fAttemptMaxPercent = 0.0;
 	g_fTier2Target = 0.0;
+	g_fTier2ManualTarget = 0.0;
 	g_eActiveVote = AssistVote_None;
+	g_eManualVoteTarget = AssistVote_None;
 	strcopy(g_sLastWipeReason, sizeof(g_sLastWipeReason), "尚无团灭记录");
 	strcopy(g_sLastResetReason, sizeof(g_sLastResetReason), reason);
 
@@ -280,6 +368,8 @@ void ResetChapterState(const char[] reason)
 	for (int client = 1; client <= MaxClients; client++)
 	{
 		g_bVoteClientVoted[client] = false;
+		g_bVoteClientAdmin[client] = false;
+		g_eVoteChoices[client] = AssistVoteChoice_None;
 		g_bStarterWeaponClaimed[client] = false;
 		g_bStarterWeaponMenuOpen[client] = false;
 		g_iStarterWeaponMenuSerial[client] = 0;
@@ -287,6 +377,9 @@ void ResetChapterState(const char[] reason)
 
 	delete g_hRoundSetupTimer;
 	g_hRoundSetupTimer = null;
+
+	delete g_hAssistVoteTimer;
+	g_hAssistVoteTimer = null;
 }
 
 public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
@@ -302,8 +395,14 @@ public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
 	g_bMissionLostHandled = false;
 	g_bAttemptFlowValid = false;
 	g_bTier2Triggered = false;
+	g_bTier5Triggered = false;
+	g_bTier2TargetManual = false;
+	g_fTier2ManualTarget = 0.0;
 	g_fAttemptMaxPercent = 0.0;
 	g_bTier2TargetValid = g_bTier2Enabled && !g_bFlowFallbackActive && CalculateWipeAverage(g_fTier2Target);
+	g_bTier2RoundNoticeSent = false;
+	g_bTier2NearNoticeSent = false;
+	AnnounceTier2RoundTarget();
 
 	delete g_hRoundSetupTimer;
 	g_hRoundSetupTimer = CreateTimer(
@@ -313,11 +412,20 @@ public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
 		TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE
 	);
 
+	delete g_hAssistVoteTimer;
+	g_hAssistVoteTimer = null;
+	g_eActiveVote = AssistVote_None;
+	g_iExpectedVoters = 0;
+	g_iReceivedVotes = 0;
+
 	for (int client = 1; client <= MaxClients; client++)
 	{
 		g_bStarterWeaponClaimed[client] = false;
 		g_bStarterWeaponMenuOpen[client] = false;
 		g_iStarterWeaponMenuSerial[client] = 0;
+		g_bVoteClientVoted[client] = false;
+		g_bVoteClientAdmin[client] = false;
+		g_eVoteChoices[client] = AssistVoteChoice_None;
 	}
 }
 
@@ -329,6 +437,11 @@ public void Event_MissionLost(Event event, const char[] name, bool dontBroadcast
 	}
 
 	g_bMissionLostHandled = true;
+	delete g_hAssistVoteTimer;
+	g_hAssistVoteTimer = null;
+	g_eActiveVote = AssistVote_None;
+	g_iExpectedVoters = 0;
+	g_iReceivedVotes = 0;
 	float finalPercent;
 	UpdateAttemptFlowSample(finalPercent);
 	g_bRoundActive = false;
@@ -380,14 +493,16 @@ public void Event_MissionLost(Event event, const char[] name, bool dontBroadcast
 			g_bFlowFallbackActive = true;
 			g_bTier2VotePending = false;
 			g_bTier3VotePending = false;
+			g_bTier4VotePending = false;
+			g_bTier5VotePending = false;
 			g_bTier2TargetValid = false;
 			PrintToChatAll(
-				"\x04[动态减难]\x05 连续 \x03%d\x05 次团灭无法取得路程，已启用导航备用模式；总团灭达到 \x03%d\x05 次可触发第一阶，第二、三阶暂停。",
+				"\x04[动态减难]\x05 连续 \x03%d\x05 次团灭无法取得路程，已启用导航备用模式；总团灭达到 \x03%d\x05 次可触发第一阶，第二至四阶暂停。",
 				g_iConsecutiveInvalidWipes,
 				g_cvFallbackTier1Wipes.IntValue
 			);
 			LogMessage(
-				"连续 %d 次团灭无法取得路程，启用导航备用模式；第一阶改用总团灭阈值 %d，第二、三阶暂停。",
+				"连续 %d 次团灭无法取得路程，启用导航备用模式；第一阶改用总团灭阈值 %d，第二至五阶暂停。",
 				g_iConsecutiveInvalidWipes,
 				g_cvFallbackTier1Wipes.IntValue
 			);
@@ -405,13 +520,21 @@ public void Event_MissionLost(Event event, const char[] name, bool dontBroadcast
 	{
 		g_bTier1VotePending = true;
 	}
-	else if (g_bTier1Enabled && !g_bTier2Enabled && !g_bFlowFallbackActive && g_iTotalWipes >= g_cvTier2Wipes.IntValue)
+	else if (g_bTier1Enabled && !g_bTier2Enabled && !g_bFlowFallbackActive && GetProgressWipes() >= g_cvTier2Wipes.IntValue)
 	{
 		g_bTier2VotePending = true;
 	}
-	else if (g_bTier2Enabled && !g_bTier3Enabled && !g_bFlowFallbackActive && g_iTotalWipes >= g_cvTier3Wipes.IntValue)
+	else if (g_bTier2Enabled && !g_bTier3Enabled && !g_bFlowFallbackActive && GetProgressWipes() >= g_cvTier3Wipes.IntValue)
 	{
 		g_bTier3VotePending = true;
+	}
+	else if (g_bTier3Enabled && !g_bTier4Enabled && !g_bFlowFallbackActive && GetProgressWipes() >= g_cvTier4Wipes.IntValue)
+	{
+		g_bTier4VotePending = true;
+	}
+	else if (g_bTier4Enabled && !g_bTier5Enabled && !g_bFlowFallbackActive && GetProgressWipes() >= g_cvTier5Wipes.IntValue)
+	{
+		g_bTier5VotePending = true;
 	}
 
 	char percentText[16];
@@ -490,6 +613,29 @@ public Action Timer_TrackFlow(Handle timer)
 		return Plugin_Continue;
 	}
 
+	if (g_bTier2Enabled && !g_bFlowFallbackActive && g_bTier2TargetValid
+		&& !g_bTier2NearNoticeSent && g_fTier2Target > 0.0
+		&& percent >= g_fTier2Target - 5.0 && percent < g_fTier2Target)
+	{
+		g_bTier2NearNoticeSent = true;
+		if (g_bTier4Enabled)
+		{
+			PrintToChatAll(
+				"\x04[动态减难]\x05 距离本回合复活路程 \x03%.1f%%\x05 还剩约 \x03%.1f%%\x05，接近目标后会复活并随机给予医疗物资。",
+				g_fTier2Target,
+				g_fTier2Target - percent
+			);
+		}
+		else
+		{
+			PrintToChatAll(
+				"\x04[动态减难]\x05 距离本回合复活路程 \x03%.1f%%\x05 还剩约 \x03%.1f%%\x05，接近目标后会复活死亡真人。",
+				g_fTier2Target,
+				g_fTier2Target - percent
+			);
+		}
+	}
+
 	if (g_bTier2Enabled && !g_bFlowFallbackActive && g_bTier2TargetValid && !g_bTier2Triggered && percent >= g_fTier2Target)
 	{
 		g_bTier2Triggered = true;
@@ -520,7 +666,296 @@ public Action Timer_TrackFlow(Handle timer)
 		}
 	}
 
+	if (g_bTier5Enabled && g_bTier2Triggered && !g_bTier5Triggered
+		&& CountLivingSurvivors() == 1)
+	{
+		g_bTier5Triggered = true;
+		int revived = ReviveDeadHumanSurvivors(g_bTier3Enabled);
+		if (revived > 0)
+		{
+			PrintToChatAll(
+				"\x04[动态减难]\x05 检测到仅剩 1 名存活生还者，已按第五阶复活 \x03%d\x05 名死亡真人。",
+				revived
+			);
+		}
+		else
+		{
+			LogMessage("第五阶触发：检测到仅剩 1 名存活生还者，但当前没有可复活的死亡真人。");
+		}
+	}
+
 	return Plugin_Continue;
+}
+
+void AnnounceTier2RoundTarget()
+{
+	if (!g_bTier2TargetValid || g_bTier2RoundNoticeSent)
+	{
+		return;
+	}
+
+	g_bTier2RoundNoticeSent = true;
+	if (!g_bTier2TargetManual && g_iWipeSampleCount <= 0)
+	{
+		if (g_bTier4Enabled)
+		{
+			PrintToChatAll("\x04[动态减难]\x05 本回合已启用路程复活，但暂时没有有效团灭路程；本回合先按 \x0350%%\x05 复活，并随机给予一件医疗物资。");
+		}
+		else if (g_bTier3Enabled)
+		{
+			PrintToChatAll("\x04[动态减难]\x05 本回合已启用路程复活，但暂时没有有效团灭路程；本回合先按 \x0350%%\x05 复活死亡真人，并给予满血。");
+		}
+		else
+		{
+			PrintToChatAll("\x04[动态减难]\x05 本回合已启用路程复活，但暂时没有有效团灭路程；本回合先按 \x0350%%\x05 复活死亡真人，给予 \x03%d\x05 实血。", g_cvReviveHealth.IntValue);
+		}
+		return;
+	}
+	if (g_bTier4Enabled)
+	{
+		PrintToChatAll(
+			"\x04[动态减难]\x05 本回合已启用路程复活：到达 \x03%.1f%%\x05 时复活死亡真人、给予满血，并随机给予一件医疗物资。",
+			g_fTier2Target
+		);
+	}
+	else if (g_bTier3Enabled)
+	{
+		PrintToChatAll(
+			"\x04[动态减难]\x05 本回合已启用路程复活：到达 \x03%.1f%%\x05 时复活死亡真人，并给予满血。",
+			g_fTier2Target
+		);
+	}
+	else
+	{
+		PrintToChatAll(
+			"\x04[动态减难]\x05 本回合已启用路程复活：到达 \x03%.1f%%\x05 时复活死亡真人，给予 \x03%d\x05 实血。",
+			g_fTier2Target,
+			g_cvReviveHealth.IntValue
+		);
+	}
+}
+
+bool HasPendingAssistVote()
+{
+	return g_bTier1VotePending || g_bTier2VotePending || g_bTier3VotePending || g_bTier4VotePending;
+}
+
+public Action Command_OpenAssistStageMenu(int client, int args)
+{
+	if (client < 1 || !IsClientInGame(client) || IsFakeClient(client))
+	{
+		return Plugin_Handled;
+	}
+	if (!g_cvEnable.BoolValue)
+	{
+		ReplyToCommand(client, "[动态减难] 当前功能已关闭。");
+		return Plugin_Handled;
+	}
+	if (g_eActiveVote != AssistVote_None || HasPendingAssistVote())
+	{
+		ReplyToCommand(client, "[动态减难] 当前已有阶段投票进行中或等待开始。");
+		return Plugin_Handled;
+	}
+
+	ShowAssistStageMenu(client);
+	return Plugin_Handled;
+}
+
+void ShowAssistStageMenu(int client)
+{
+	Menu menu = new Menu(MenuHandler_AssistStageMenu);
+	menu.SetTitle("选择要发起的最高减难阶段");
+
+	if (!g_bTier1Enabled)
+	{
+		menu.AddItem("tier|1", "第一阶：开局止痛药");
+	}
+	if (!g_bTier2Enabled && !g_bFlowFallbackActive)
+	{
+		menu.AddItem("tier|2", "第二阶：路程复活");
+	}
+	if (!g_bTier3Enabled && !g_bFlowFallbackActive)
+	{
+		menu.AddItem("tier|3", "第三阶：满血复活");
+	}
+	if (!g_bTier4Enabled && !g_bFlowFallbackActive)
+	{
+		menu.AddItem("tier|4", "第四阶：复活医疗物资");
+	}
+	if (!g_bTier5Enabled && !g_bFlowFallbackActive)
+	{
+		menu.AddItem("tier|5", "第五阶：孤立生还者复活");
+	}
+	if (menu.ItemCount <= 0)
+	{
+		menu.AddItem("none", "所有减难阶段均已开启", ITEMDRAW_DISABLED);
+	}
+
+	menu.ExitButton = true;
+	if (!menu.Display(client, MENU_TIME_FOREVER))
+	{
+		delete menu;
+	}
+}
+
+public int MenuHandler_AssistStageMenu(Menu menu, MenuAction action, int param1, int param2)
+{
+	if (action == MenuAction_Select)
+	{
+		char info[32];
+		menu.GetItem(param2, info, sizeof(info));
+		char data[2][16];
+		if (ExplodeString(info, "|", data, sizeof(data), sizeof(data[])) == 2
+			&& StrEqual(data[0], "tier", false))
+		{
+			AssistVote target = view_as<AssistVote>(StringToInt(data[1]));
+			if (g_eActiveVote != AssistVote_None || HasPendingAssistVote())
+			{
+				PrintToChat(param1, "\x04[动态减难]\x05 当前已有阶段投票进行中或等待开始。");
+			}
+			else if ((target == AssistVote_Tier2 || target == AssistVote_Tier3 || target == AssistVote_Tier4 || target == AssistVote_Tier5)
+				&& g_bFlowFallbackActive)
+			{
+				PrintToChat(param1, "\x04[动态减难]\x05 当前处于导航备用模式，第二至五阶暂不可发起。");
+			}
+			else
+			{
+				if (GetUserAdmin(param1) != INVALID_ADMIN_ID)
+				{
+					EnableAssistStagesThrough(target);
+					PrintToChatAll("\x04[动态减难]\x05 管理员 \x03%N\x05 已直接开启目标阶段及所有前置减难阶段。", param1);
+				}
+				else
+				{
+					QueueAssistVoteChain(target);
+					PrintToChat(param1, "\x04[动态减难]\x05 已发起目标阶段投票，前置阶段会一次性包含在本次投票中。");
+					HandlePendingVote();
+				}
+			}
+		}
+	}
+	else if (action == MenuAction_End)
+	{
+		delete menu;
+	}
+	return 0;
+}
+
+void QueueAssistVoteChain(AssistVote target)
+{
+	g_eManualVoteTarget = target;
+}
+
+void EnableAssistStagesThrough(AssistVote target)
+{
+	SetStageProgressOffset(target);
+	if (target >= AssistVote_Tier1)
+	{
+		g_bTier1Enabled = true;
+	}
+	if (target >= AssistVote_Tier3)
+	{
+		g_bTier3Enabled = true;
+	}
+	if (target >= AssistVote_Tier4)
+	{
+		g_bTier4Enabled = true;
+	}
+	if (target >= AssistVote_Tier5)
+	{
+		g_bTier5Enabled = true;
+	}
+	if (target >= AssistVote_Tier2)
+	{
+		g_bTier2Enabled = true;
+		g_bTier2TargetValid = RefreshTier2Target();
+		g_bTier2RoundNoticeSent = false;
+		g_bTier2NearNoticeSent = false;
+		AnnounceTier2RoundTarget();
+	}
+}
+
+void SetStageProgressOffset(AssistVote target)
+{
+	if (target == AssistVote_Tier2)
+	{
+		g_iWipeProgressOffset = g_cvTier2Wipes.IntValue - g_iTotalWipes;
+	}
+	else if (target == AssistVote_Tier3)
+	{
+		g_iWipeProgressOffset = g_cvTier3Wipes.IntValue - g_iTotalWipes;
+	}
+	else if (target == AssistVote_Tier4)
+	{
+		g_iWipeProgressOffset = g_cvTier4Wipes.IntValue - g_iTotalWipes;
+	}
+	else if (target == AssistVote_Tier5)
+	{
+		g_iWipeProgressOffset = g_cvTier5Wipes.IntValue - g_iTotalWipes;
+	}
+}
+
+int GetProgressWipes()
+{
+	return g_iTotalWipes + g_iWipeProgressOffset;
+}
+
+public Action Command_SetReviveFlow(int client, int args)
+{
+	if (client < 1 || !IsClientInGame(client) || IsFakeClient(client))
+	{
+		return Plugin_Handled;
+	}
+	if (!g_cvEnable.BoolValue)
+	{
+		ReplyToCommand(client, "[动态减难] 当前功能已关闭。");
+		return Plugin_Handled;
+	}
+	if (g_bTier2Triggered)
+	{
+		ReplyToCommand(client, "[动态减难] 本回合已经完成路程复活，不能再修改目标。");
+		return Plugin_Handled;
+	}
+	if (g_bMapFlowDisabled || g_bFlowFallbackActive)
+	{
+		ReplyToCommand(client, "[动态减难] 当前地图路程功能不可用，不能设置复活目标。");
+		return Plugin_Handled;
+	}
+	if (args < 1)
+	{
+		ReplyToCommand(client, "用法：!fr <0-100>，例如 !fr 50。");
+		return Plugin_Handled;
+	}
+
+	char valueText[32];
+	GetCmdArg(1, valueText, sizeof(valueText));
+	float target;
+	if (StringToFloatEx(valueText, target) <= 0 || target < 0.0 || target > 100.0)
+	{
+		ReplyToCommand(client, "[动态减难] 复活路程必须是 0 到 100 之间的数字。");
+		return Plugin_Handled;
+	}
+
+	g_bTier2TargetManual = true;
+	g_fTier2ManualTarget = target;
+	g_fTier2Target = target;
+	g_bTier2TargetValid = true;
+	g_bTier2RoundNoticeSent = false;
+	g_bTier2NearNoticeSent = false;
+
+	if (g_bTier2Enabled)
+	{
+		AnnounceTier2RoundTarget();
+	}
+	else
+	{
+		PrintToChatAll(
+			"\x04[动态减难]\x05 玩家 \x03%N\x05 已将本回合复活路程手动设为 \x03%.1f%%\x05；第二阶开启后将使用该目标。",
+			client,
+			target
+		);
+	}
+	return Plugin_Handled;
 }
 
 public Action Command_StarterWeaponMenu(int client, int args)
@@ -681,6 +1116,10 @@ void FillStarterWeaponReserveAmmo(int client, int weapon, int weaponIndex)
 	{
 		ammoMaxCvar = g_cvAmmoShotgunMax;
 	}
+	else if (weaponIndex == 2)
+	{
+		ammoMaxCvar = g_cvAmmoSniperMax;
+	}
 	if (ammoMaxCvar == null)
 	{
 		return;
@@ -783,7 +1222,11 @@ bool HandlePendingVote()
 	}
 
 	AssistVote voteType = AssistVote_None;
-	if (g_bTier1VotePending && !g_bTier1Enabled)
+	if (g_eManualVoteTarget != AssistVote_None)
+	{
+		voteType = g_eManualVoteTarget;
+	}
+	else if (g_bTier1VotePending && !g_bTier1Enabled)
 	{
 		voteType = AssistVote_Tier1;
 	}
@@ -795,26 +1238,32 @@ bool HandlePendingVote()
 	{
 		voteType = AssistVote_Tier3;
 	}
+	else if (g_bTier4VotePending && g_bTier3Enabled && !g_bTier4Enabled && !g_bFlowFallbackActive)
+	{
+		voteType = AssistVote_Tier4;
+	}
+	else if (g_bTier5VotePending && g_bTier4Enabled && !g_bTier5Enabled && !g_bFlowFallbackActive)
+	{
+		voteType = AssistVote_Tier5;
+	}
 	else
 	{
 		return true;
 	}
 
-	if (!L4D2NativeVote_IsAllowNewVote())
-	{
-		return false;
-	}
-
-	int clients[MAXPLAYERS];
+	int clients[MAXPLAYERS + 1];
 	int playerCount = 0;
 	for (int client = 1; client <= MaxClients; client++)
 	{
 		g_bVoteClientVoted[client] = false;
+		g_bVoteClientAdmin[client] = false;
+		g_eVoteChoices[client] = AssistVoteChoice_None;
 		if (!IsClientInGame(client) || IsFakeClient(client))
 		{
 			continue;
 		}
 		clients[playerCount++] = client;
+		g_bVoteClientAdmin[client] = GetUserAdmin(client) != INVALID_ADMIN_ID;
 	}
 
 	if (playerCount <= 0)
@@ -822,128 +1271,286 @@ bool HandlePendingVote()
 		return false;
 	}
 
-	L4D2NativeVote vote = L4D2NativeVote(VoteHandler_Assistance);
-	vote.Value = view_as<int>(voteType);
-	vote.Initiator = 0;
-
-	if (voteType == AssistVote_Tier1)
-	{
-		vote.SetTitle("检测到地图难度过高，开启第一阶减难？");
-	}
-	else if (voteType == AssistVote_Tier2)
-	{
-		vote.SetTitle("多次团灭，开启第二阶路程复活？");
-	}
-	else
-	{
-		vote.SetTitle("继续多次团灭，开启第三阶满血复活？");
-	}
-
+	g_iAssistVoteSerial++;
 	g_eActiveVote = voteType;
 	g_iExpectedVoters = playerCount;
 	g_iReceivedVotes = 0;
+	g_iAssistVoteYes = 0;
+	g_iAssistVoteNo = 0;
+	g_iAssistVoteAbstain = 0;
 
-	if (!vote.DisplayVote(clients, playerCount, g_cvVoteTime.IntValue))
+	for (int i = 0; i < playerCount; i++)
 	{
-		g_eActiveVote = AssistVote_None;
-		g_iExpectedVoters = 0;
-		return false;
+		int client = clients[i];
+		if (!ShowAssistVoteMenu(client, voteType, g_iAssistVoteSerial))
+		{
+			RecordAssistVote(client, AssistVoteChoice_Abstain, g_iAssistVoteSerial);
+		}
 	}
+
+	g_hAssistVoteTimer = CreateTimer(
+		float(g_cvVoteTime.IntValue),
+		Timer_AssistVoteEnd,
+		g_iAssistVoteSerial,
+		TIMER_FLAG_NO_MAPCHANGE
+	);
 
 	if (voteType == AssistVote_Tier1)
 	{
 		g_bTier1VotePending = false;
-		PrintToChatAll("\x04[动态减难]\x05 第一阶投票开始；必须所有在线真人都投票，否则本次作废。");
+		PrintToChatAll("\x04[动态减难]\x05 第一阶投票开始：左侧菜单选择 1 同意、2 反对、3 弃权、4 退出；同意率需超过 %.0f%%，管理员反对可否决。", ASSIST_VOTE_PASS_PERCENT);
 	}
 	else if (voteType == AssistVote_Tier2)
 	{
 		g_bTier2VotePending = false;
-		PrintToChatAll("\x04[动态减难]\x05 第二阶投票开始；必须所有在线真人都投票，否则本次作废。");
+		PrintToChatAll("\x04[动态减难]\x05 第二阶投票开始：左侧菜单选择 1 同意、2 反对、3 弃权、4 退出；同意率需超过 %.0f%%，管理员反对可否决。", ASSIST_VOTE_PASS_PERCENT);
 	}
-	else
+	else if (voteType == AssistVote_Tier3)
 	{
 		g_bTier3VotePending = false;
-		PrintToChatAll("\x04[动态减难]\x05 第三阶投票开始；必须所有在线真人都投票，否则本次作废。");
+		PrintToChatAll("\x04[动态减难]\x05 第三阶投票开始：左侧菜单选择 1 同意、2 反对、3 弃权、4 退出；同意率需超过 %.0f%%，管理员反对可否决。", ASSIST_VOTE_PASS_PERCENT);
+	}
+	else if (voteType == AssistVote_Tier4)
+	{
+		g_bTier4VotePending = false;
+		PrintToChatAll("\x04[动态减难]\x05 第四阶投票开始：左侧菜单选择 1 同意、2 反对、3 弃权、4 退出；同意率需超过 %.0f%%，管理员反对可否决。", ASSIST_VOTE_PASS_PERCENT);
+	}
+	else if (voteType == AssistVote_Tier5)
+	{
+		g_bTier5VotePending = false;
+		PrintToChatAll("\x04[动态减难]\x05 第五阶投票开始：左侧菜单选择 1 同意、2 反对、3 弃权、4 退出；同意率需超过 %.0f%%，管理员反对可否决。", ASSIST_VOTE_PASS_PERCENT);
 	}
 
 	return true;
 }
 
-void VoteHandler_Assistance(L4D2NativeVote vote, VoteAction action, int param1, int param2)
+bool ShowAssistVoteMenu(int client, AssistVote voteType, int serial)
 {
-	AssistVote voteType = view_as<AssistVote>(vote.Value);
-
-	switch (action)
+	Menu menu = new Menu(MenuHandler_AssistanceMenu);
+	if (voteType == AssistVote_Tier1)
 	{
-		case VoteAction_PlayerVoted:
+		menu.SetTitle("开启第一阶减难？\n同意率需超过 %.0f%%", ASSIST_VOTE_PASS_PERCENT);
+	}
+	else if (voteType == AssistVote_Tier2)
+	{
+		menu.SetTitle("开启第二阶路程复活？\n同意率需超过 %.0f%%", ASSIST_VOTE_PASS_PERCENT);
+	}
+	else if (voteType == AssistVote_Tier3)
+	{
+		menu.SetTitle("开启第三阶满血复活？\n同意率需超过 %.0f%%", ASSIST_VOTE_PASS_PERCENT);
+	}
+	else if (voteType == AssistVote_Tier4)
+	{
+		menu.SetTitle("开启第四阶复活医疗物资？\n同意率需超过 %.0f%%", ASSIST_VOTE_PASS_PERCENT);
+	}
+	else
+	{
+		menu.SetTitle("开启第五阶孤立生还者复活？\n同意率需超过 %.0f%%", ASSIST_VOTE_PASS_PERCENT);
+	}
+
+	char info[32];
+	FormatEx(info, sizeof(info), "yes|%d", serial);
+	menu.AddItem(info, "同意");
+	FormatEx(info, sizeof(info), "no|%d", serial);
+	menu.AddItem(info, "反对");
+	FormatEx(info, sizeof(info), "abstain|%d", serial);
+	menu.AddItem(info, "弃权");
+	FormatEx(info, sizeof(info), "exit|%d", serial);
+	menu.AddItem(info, "退出");
+	menu.ExitButton = false;
+
+	if (!menu.Display(client, g_cvVoteTime.IntValue))
+	{
+		delete menu;
+		return false;
+	}
+	return true;
+}
+
+public int MenuHandler_AssistanceMenu(Menu menu, MenuAction action, int param1, int param2)
+{
+	if (action == MenuAction_Select)
+	{
+		char info[32];
+		menu.GetItem(param2, info, sizeof(info));
+
+		char data[2][16];
+		if (ExplodeString(info, "|", data, sizeof(data), sizeof(data[])) == 2)
 		{
-			int client = param1;
-			if (client >= 1 && client <= MaxClients && !g_bVoteClientVoted[client])
+			AssistVoteChoice choice = AssistVoteChoice_Abstain;
+			if (StrEqual(data[0], "yes", false))
 			{
-				g_bVoteClientVoted[client] = true;
-				g_iReceivedVotes++;
+				choice = AssistVoteChoice_Yes;
 			}
+			else if (StrEqual(data[0], "no", false))
+			{
+				choice = AssistVoteChoice_No;
+			}
+
+			RecordAssistVote(param1, choice, StringToInt(data[1]));
 		}
-		case VoteAction_End:
+	}
+	else if (action == MenuAction_Cancel)
+	{
+		RecordAssistVote(param1, AssistVoteChoice_Abstain, g_iAssistVoteSerial);
+	}
+	else if (action == MenuAction_End)
+	{
+		delete menu;
+	}
+	return 0;
+}
+
+void RecordAssistVote(int client, AssistVoteChoice choice, int serial)
+{
+	if (serial != g_iAssistVoteSerial || g_eActiveVote == AssistVote_None
+		|| client < 1 || client > MaxClients || g_bVoteClientVoted[client])
+	{
+		return;
+	}
+
+	g_bVoteClientVoted[client] = true;
+	g_eVoteChoices[client] = choice;
+	g_iReceivedVotes++;
+	switch (choice)
+	{
+		case AssistVoteChoice_Yes:
+			g_iAssistVoteYes++;
+
+		case AssistVoteChoice_No:
+			g_iAssistVoteNo++;
+
+		default:
+			g_iAssistVoteAbstain++;
+	}
+}
+
+public Action Timer_AssistVoteEnd(Handle timer, any serial)
+{
+	if (timer == g_hAssistVoteTimer)
+	{
+		g_hAssistVoteTimer = null;
+	}
+
+	if (serial == g_iAssistVoteSerial && g_eActiveVote != AssistVote_None)
+	{
+		FinishAssistVote();
+	}
+	return Plugin_Stop;
+}
+
+void FinishAssistVote()
+{
+	AssistVote voteType = g_eActiveVote;
+	bool manualVote = g_eManualVoteTarget != AssistVote_None;
+	int yesVotes = g_iAssistVoteYes;
+	int noVotes = g_iAssistVoteNo;
+	int unrecordedVotes = g_iExpectedVoters - g_iReceivedVotes;
+	if (unrecordedVotes < 0)
+	{
+		unrecordedVotes = 0;
+	}
+	int abstainVotes = g_iAssistVoteAbstain + unrecordedVotes;
+	int activeVotes = yesVotes + noVotes;
+	bool adminVeto = false;
+	for (int client = 1; client <= MaxClients; client++)
+	{
+		if (g_bVoteClientAdmin[client] && g_eVoteChoices[client] == AssistVoteChoice_No)
 		{
-			int yesVotes = vote.YesCount;
-			int noVotes = vote.NoCount;
-			bool allVoted = g_iExpectedVoters > 0 && g_iReceivedVotes >= g_iExpectedVoters;
-			bool passed = allVoted && yesVotes > noVotes;
-
-			if (!allVoted)
-			{
-				vote.SetFail();
-				PrintToChatAll(
-					"\x04[动态减难]\x05 本次投票作废：只有 \x03%d/%d\x05 名真人完成投票。",
-					g_iReceivedVotes,
-					g_iExpectedVoters
-				);
-			}
-			else if (!passed)
-			{
-				vote.SetFail();
-				PrintToChatAll(
-					"\x04[动态减难]\x05 投票未通过：同意 \x03%d\x05，反对 \x03%d\x05。",
-					yesVotes,
-					noVotes
-				);
-			}
-			else if (voteType == AssistVote_Tier1)
-			{
-				vote.SetPass("第一阶减难已开启");
-				g_bTier1Enabled = true;
-				PrintToChatAll("\x04[动态减难]\x05 第一阶已开启：从下一次团灭重开开始，每次按真人数量生成止痛药。");
-			}
-			else if (voteType == AssistVote_Tier2)
-			{
-				vote.SetPass("第二阶减难已开启");
-				g_bTier2Enabled = true;
-				g_bTier2TargetValid = CalculateWipeAverage(g_fTier2Target);
-
-				if (g_bTier2TargetValid)
-				{
-					PrintToChatAll(
-						"\x04[动态减难]\x05 第二阶已开启：本回合在 \x03%.1f%%\x05 路程复活死亡真人。",
-						g_fTier2Target
-					);
-				}
-				else
-				{
-					PrintToChatAll("\x04[动态减难]\x05 第二阶已开启，但有效团灭路程不足 5 次，本回合不会复活。");
-				}
-			}
-		else if (voteType == AssistVote_Tier3)
-		{
-			vote.SetPass("第三阶减难已开启");
-			g_bTier3Enabled = true;
-			PrintToChatAll("\x04[动态减难]\x05 第三阶已开启：后续路程复活的死亡真人将以满血状态复活。");
-			}
-
-			g_eActiveVote = AssistVote_None;
-			g_iExpectedVoters = 0;
-			g_iReceivedVotes = 0;
+			adminVeto = true;
+			break;
 		}
+	}
+
+	float yesPercent = activeVotes > 0 ? float(yesVotes) * 100.0 / float(activeVotes) : 0.0;
+	bool passed = !adminVeto && activeVotes > 0 && yesPercent > ASSIST_VOTE_PASS_PERCENT;
+	if (!passed)
+	{
+		ClearHigherPendingVotes(voteType);
+	}
+	if (adminVeto)
+	{
+		PrintToChatAll("\x04[动态减难]\x05 投票失败：有管理员投反对票，执行最高否决；同意 %d，反对 %d，弃权 %d。", yesVotes, noVotes, abstainVotes);
+	}
+	else if (!passed)
+	{
+		PrintToChatAll("\x04[动态减难]\x05 投票未通过：同意 %d，反对 %d，弃权 %d，同意率 %.1f%%（需超过 %.0f%%）。", yesVotes, noVotes, abstainVotes, yesPercent, ASSIST_VOTE_PASS_PERCENT);
+	}
+	else if (manualVote)
+	{
+		EnableAssistStagesThrough(voteType);
+		PrintToChatAll("\x04[动态减难]\x05 主动阶段投票通过：目标阶段及所有前置阶段已一次开启。\n同意 %d，反对 %d，弃权 %d，同意率 %.1f%%。", yesVotes, noVotes, abstainVotes, yesPercent);
+	}
+	else if (voteType == AssistVote_Tier1)
+	{
+		g_bTier1Enabled = true;
+		PrintToChatAll("\x04[动态减难]\x05 第一阶已开启：从下一次团灭重开开始，每次按真人数量生成止痛药。\n同意 %d，反对 %d，弃权 %d，同意率 %.1f%%。", yesVotes, noVotes, abstainVotes, yesPercent);
+	}
+	else if (voteType == AssistVote_Tier2)
+	{
+		g_bTier2Enabled = true;
+		g_bTier2TargetValid = RefreshTier2Target();
+		if (g_bTier2TargetValid)
+		{
+			g_bTier2RoundNoticeSent = false;
+			g_bTier2NearNoticeSent = false;
+			AnnounceTier2RoundTarget();
+			PrintToChatAll("\x04[动态减难]\x05 第二阶投票通过：同意 %d，反对 %d，弃权 %d，同意率 %.1f%%。", yesVotes, noVotes, abstainVotes, yesPercent);
+		}
+		else
+		{
+			PrintToChatAll("\x04[动态减难]\x05 第二阶已开启，但有效团灭路程不足 5 次，本回合不会复活。\n同意 %d，反对 %d，弃权 %d，同意率 %.1f%%。", yesVotes, noVotes, abstainVotes, yesPercent);
+		}
+	}
+	else if (voteType == AssistVote_Tier3)
+	{
+		g_bTier3Enabled = true;
+		PrintToChatAll("\x04[动态减难]\x05 第三阶已开启：后续路程复活的死亡真人将以满血状态复活。\n同意 %d，反对 %d，弃权 %d，同意率 %.1f%%。", yesVotes, noVotes, abstainVotes, yesPercent);
+	}
+	else if (voteType == AssistVote_Tier4)
+	{
+		g_bTier4Enabled = true;
+		PrintToChatAll("\x04[动态减难]\x05 第四阶已开启：后续路程复活的真人将随机获得一件医疗物资（止痛药、肾上腺素、医疗包或除颤器）。\n同意 %d，反对 %d，弃权 %d，同意率 %.1f%%。", yesVotes, noVotes, abstainVotes, yesPercent);
+	}
+	else if (voteType == AssistVote_Tier5)
+	{
+		g_bTier5Enabled = true;
+		PrintToChatAll("\x04[动态减难]\x05 第五阶已开启：本回合路程复活后，若只剩 1 名存活生还者，将复活当前死亡真人。\n同意 %d，反对 %d，弃权 %d，同意率 %.1f%%。", yesVotes, noVotes, abstainVotes, yesPercent);
+	}
+
+	g_eActiveVote = AssistVote_None;
+	g_iExpectedVoters = 0;
+	g_iReceivedVotes = 0;
+	g_iAssistVoteYes = 0;
+	g_iAssistVoteNo = 0;
+	g_iAssistVoteAbstain = 0;
+	g_eManualVoteTarget = AssistVote_None;
+}
+
+void ClearHigherPendingVotes(AssistVote failedVote)
+{
+	g_eManualVoteTarget = AssistVote_None;
+	if (failedVote <= AssistVote_Tier1)
+	{
+		g_bTier2VotePending = false;
+		g_bTier3VotePending = false;
+		g_bTier4VotePending = false;
+		g_bTier5VotePending = false;
+	}
+	else if (failedVote == AssistVote_Tier2)
+	{
+		g_bTier3VotePending = false;
+		g_bTier4VotePending = false;
+		g_bTier5VotePending = false;
+	}
+	else if (failedVote == AssistVote_Tier3)
+	{
+		g_bTier4VotePending = false;
+		g_bTier5VotePending = false;
+	}
+	else if (failedVote == AssistVote_Tier4)
+	{
+		g_bTier5VotePending = false;
 	}
 }
 
@@ -1047,19 +1654,35 @@ void FormatRecentWipes(char[] buffer, int maxlen)
 
 bool CalculateWipeAverage(float &average)
 {
-	if (g_iWipeSampleCount < SAMPLE_COUNT || g_bMapFlowDisabled || g_bFlowFallbackActive)
+	if (g_bMapFlowDisabled || g_bFlowFallbackActive)
 	{
 		return false;
 	}
+	if (g_iWipeSampleCount <= 0)
+	{
+		average = 50.0;
+		return true;
+	}
 
 	float total = 0.0;
-	for (int i = 0; i < SAMPLE_COUNT; i++)
+	for (int i = 0; i < g_iWipeSampleCount; i++)
 	{
 		total += g_fWipeSamples[i];
 	}
 
-	average = total / float(SAMPLE_COUNT);
+	average = total / float(g_iWipeSampleCount);
 	return average >= 0.0 && average <= 100.0;
+}
+
+bool RefreshTier2Target()
+{
+	if (g_bTier2TargetManual)
+	{
+		g_fTier2Target = g_fTier2ManualTarget;
+		return true;
+	}
+
+	return CalculateWipeAverage(g_fTier2Target);
 }
 
 int ReviveDeadHumanSurvivors(bool fullHealth)
@@ -1112,10 +1735,31 @@ int ReviveDeadHumanSurvivors(bool fullHealth)
 		{
 			SetEntProp(client, Prop_Send, "m_isGoingToDie", 0);
 		}
+		if (g_bTier4Enabled)
+		{
+			GiveRandomReviveSupply(client);
+		}
 		revived++;
 	}
 
 	return revived;
+}
+
+void GiveRandomReviveSupply(int client)
+{
+	int supplyIndex = GetRandomInt(0, REVIVE_SUPPLY_COUNT - 1);
+	int entity = GivePlayerItem(client, g_sReviveSupplyClassnames[supplyIndex]);
+	if (entity == -1)
+	{
+		LogError("无法为玩家 %N 发放第四阶复活医疗物资 %s。", client, g_sReviveSupplyClassnames[supplyIndex]);
+		return;
+	}
+
+	PrintToChat(
+		client,
+		"\x04[动态减难]\x05 第四阶复活援助：获得随机医疗物资 \x03%s\x05。",
+		g_sReviveSupplyNames[supplyIndex]
+	);
 }
 
 int CountHumanSurvivors()
@@ -1124,6 +1768,20 @@ int CountHumanSurvivors()
 	for (int client = 1; client <= MaxClients; client++)
 	{
 		if (IsClientInGame(client) && !IsFakeClient(client) && GetClientTeam(client) == TEAM_SURVIVOR)
+		{
+			count++;
+		}
+	}
+	return count;
+}
+
+int CountLivingSurvivors()
+{
+	int count = 0;
+	for (int client = 1; client <= MaxClients; client++)
+	{
+		if (IsClientInGame(client) && GetClientTeam(client) == TEAM_SURVIVOR
+			&& IsPlayerAlive(client) && !GetEntProp(client, Prop_Send, "m_isIncapacitated"))
 		{
 			count++;
 		}
@@ -1256,6 +1914,14 @@ public Action Command_Status(int client, int args)
 	{
 		FormatEx(voteState, sizeof(voteState), "第三阶进行中 %d/%d", g_iReceivedVotes, g_iExpectedVoters);
 	}
+	else if (g_eActiveVote == AssistVote_Tier4)
+	{
+		FormatEx(voteState, sizeof(voteState), "第四阶进行中 %d/%d", g_iReceivedVotes, g_iExpectedVoters);
+	}
+	else if (g_eActiveVote == AssistVote_Tier5)
+	{
+		FormatEx(voteState, sizeof(voteState), "第五阶进行中 %d/%d", g_iReceivedVotes, g_iExpectedVoters);
+	}
 	else if (g_bTier1VotePending)
 	{
 		strcopy(voteState, sizeof(voteState), "第一阶等待");
@@ -1267,6 +1933,14 @@ public Action Command_Status(int client, int args)
 	else if (g_bTier3VotePending && !g_bFlowFallbackActive)
 	{
 		strcopy(voteState, sizeof(voteState), "第三阶等待");
+	}
+	else if (g_bTier4VotePending && !g_bFlowFallbackActive)
+	{
+		strcopy(voteState, sizeof(voteState), "第四阶等待");
+	}
+	else if (g_bTier5VotePending && !g_bFlowFallbackActive)
+	{
+		strcopy(voteState, sizeof(voteState), "第五阶等待");
 	}
 	else
 	{
@@ -1308,23 +1982,39 @@ public Action Command_Status(int client, int args)
 	}
 	else if (g_bFlowFallbackActive)
 	{
-		strcopy(nextStep, sizeof(nextStep), "第一阶已开启；第二、三阶因导航备用模式暂停");
+		strcopy(nextStep, sizeof(nextStep), "第一阶已开启；第二至五阶因导航备用模式暂停");
 	}
 	else if (!g_bTier2Enabled)
 	{
-		FormatEx(nextStep, sizeof(nextStep), "第二阶：总团灭 %d/%d", g_iTotalWipes, g_cvTier2Wipes.IntValue);
+		FormatEx(nextStep, sizeof(nextStep), "第二阶：进度 %d/%d（实际团灭 %d）", GetProgressWipes(), g_cvTier2Wipes.IntValue, g_iTotalWipes);
 	}
 	else if (!g_bTier3Enabled)
 	{
-		FormatEx(nextStep, sizeof(nextStep), "第三阶：总团灭 %d/%d", g_iTotalWipes, g_cvTier3Wipes.IntValue);
+		FormatEx(nextStep, sizeof(nextStep), "第三阶：进度 %d/%d（实际团灭 %d）", GetProgressWipes(), g_cvTier3Wipes.IntValue, g_iTotalWipes);
+	}
+	else if (!g_bTier4Enabled)
+	{
+		FormatEx(nextStep, sizeof(nextStep), "第四阶：进度 %d/%d（实际团灭 %d）", GetProgressWipes(), g_cvTier4Wipes.IntValue, g_iTotalWipes);
+	}
+	else if (!g_bTier5Enabled)
+	{
+		FormatEx(nextStep, sizeof(nextStep), "第五阶：进度 %d/%d（实际团灭 %d）", GetProgressWipes(), g_cvTier5Wipes.IntValue, g_iTotalWipes);
 	}
 	else
 	{
-		strcopy(nextStep, sizeof(nextStep), "第一、二、三阶均已开启");
+		strcopy(nextStep, sizeof(nextStep), "第一、二、三、四、五阶均已开启");
 	}
 
 	char stageState[64];
-	if (g_bTier3Enabled)
+	if (g_bTier5Enabled)
+	{
+		strcopy(stageState, sizeof(stageState), "第五阶（孤立生还者复活）");
+	}
+	else if (g_bTier4Enabled)
+	{
+		strcopy(stageState, sizeof(stageState), "第四阶（满血复活+医疗物资）");
+	}
+	else if (g_bTier3Enabled)
 	{
 		strcopy(stageState, sizeof(stageState), "第三阶（满血复活）");
 	}

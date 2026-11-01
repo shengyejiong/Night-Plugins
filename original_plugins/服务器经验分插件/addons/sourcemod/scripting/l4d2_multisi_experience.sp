@@ -28,6 +28,11 @@
 
 #define MAX_TRACKED_ENTITIES 2049
 
+#define ROUND_LEADER_FAST_CLEAR 0
+#define ROUND_LEADER_FINISHER_RATE 1
+#define ROUND_LEADER_HEADSHOT_RATE 2
+#define ROUND_LEADER_COUNT      3
+
 #define DecayWeapon_None            -1
 #define DecayWeapon_Rifle            0
 #define DecayWeapon_RifleDesert      1
@@ -45,7 +50,7 @@ public Plugin myinfo =
     name = "L4D2 Multi-SI Campaign Experience",
     author = "night",
     description = "Round and long-term experience rating for multi-SI coop servers.",
-    version = "1.10.6",
+    version = "1.11.0",
     url = ""
 };
 
@@ -87,6 +92,7 @@ ConVar g_hW_SmokerSelfClear;
 ConVar g_hFastClearTime;
 ConVar g_hFinisherMinKills;
 ConVar g_hHeadshotMinKills;
+ConVar g_hW_RoundLeader[ROUND_LEADER_COUNT];
 
 ConVar g_hWeaponMult_SMG;
 ConVar g_hWeaponMult_SMGSilenced;
@@ -188,6 +194,7 @@ int   g_iHunterDeadstops[MAXPLAYERS + 1];
 int   g_iChargerLevels[MAXPLAYERS + 1];
 int   g_iFastClears[MAXPLAYERS + 1];
 int   g_iSmokerSelfClears[MAXPLAYERS + 1];
+float g_fRoundLeaderBonus[MAXPLAYERS + 1][ROUND_LEADER_COUNT];
 int   g_iLastFastClearPinner[MAXPLAYERS + 1];
 int   g_iLastFastClearVictim[MAXPLAYERS + 1];
 float g_fLastFastClearAt[MAXPLAYERS + 1];
@@ -283,6 +290,9 @@ public void OnPluginStart()
     g_hFastClearTime = CreateConVar("l4d2_mexp_fast_clear_time", "0.75", "Maximum control duration in seconds for the fast-clear bonus. 0 disables.", FCVAR_NOTIFY, true, 0.0);
     g_hFinisherMinKills = CreateConVar("l4d2_mexp_finisher_min_kills", "20", "Minimum Hunter/Jockey/Charger kills required for the round finisher-rate leader.", FCVAR_NOTIFY, true, 0.0);
     g_hHeadshotMinKills = CreateConVar("l4d2_mexp_headshot_min_kills", "20", "Minimum normal special infected kills required for the round headshot-rate leader.", FCVAR_NOTIFY, true, 0.0);
+    g_hW_RoundLeader[ROUND_LEADER_FAST_CLEAR] = CreateConVar("l4d2_mexp_w_top_fast_clear", "10.0", "Round score bonus for the most fast teammate clears. Ties receive the full bonus; 0 disables.", FCVAR_NOTIFY, true, 0.0);
+    g_hW_RoundLeader[ROUND_LEADER_FINISHER_RATE] = CreateConVar("l4d2_mexp_w_top_finisher_rate", "5.0", "Round score bonus for the existing finisher-rate leader with a positive finisher count and the minimum kill sample. 0 disables.", FCVAR_NOTIFY, true, 0.0);
+    g_hW_RoundLeader[ROUND_LEADER_HEADSHOT_RATE] = CreateConVar("l4d2_mexp_w_top_headshot_rate", "4.0", "Round score bonus for the existing headshot-rate leader with a positive headshot count and the minimum kill sample. 0 disables.", FCVAR_NOTIFY, true, 0.0);
 
     g_hWeaponMult_SMG = CreateConVar("l4d2_mexp_weapon_mult_smg", "1.3", "Damage score multiplier for Uzi/SMG.", FCVAR_NOTIFY, true, 0.0);
     g_hWeaponMult_SMGSilenced = CreateConVar("l4d2_mexp_weapon_mult_smg_silenced", "1.25", "Damage score multiplier for silenced SMG.", FCVAR_NOTIFY, true, 0.0);
@@ -633,6 +643,8 @@ void FinalizeRound()
         return;
     }
 
+    AwardRoundLeaderBonuses(required);
+
     float ratingWeightScale = GetShortRoundWeightScale(duration);
     float roundScores[MAXPLAYERS + 1];
     float teamScoreTotal = 0.0;
@@ -758,17 +770,20 @@ void FinalizeRound()
 
         AnnounceFastClearLeaders(required);
 
+        char rateReward[64];
         int finisherBest = FindBestFinisher(required);
         if (IsValidClient(finisherBest))
         {
             int finisherKills = GetFinisherKillCount(finisherBest);
             int targetKills = GetFinisherTargetKillCount(finisherBest);
             float finisherRate = GetFinisherRate(finisherBest) * 100.0;
-            PrintToChatAll("\x05本局绝杀率最高：\x03%N\x01，绝杀率 %.1f%%（%d/%d）。",
+            FormatRoundLeaderReward(g_fRoundLeaderBonus[finisherBest][ROUND_LEADER_FINISHER_RATE], rateReward, sizeof(rateReward));
+            PrintToChatAll("\x05本局绝杀率最高：\x03%N\x01，绝杀率 %.1f%%（%d/%d）%s。",
                 finisherBest,
                 finisherRate,
                 finisherKills,
-                targetKills
+                targetKills,
+                rateReward
             );
         }
         else
@@ -784,11 +799,13 @@ void FinalizeRound()
         if (IsValidClient(headshotBest))
         {
             float headshotRate = GetHeadshotRate(headshotBest) * 100.0;
-            PrintToChatAll("\x05本局爆头率最高：\x03%N\x01，爆头率 %.1f%%（%d/%d）。",
+            FormatRoundLeaderReward(g_fRoundLeaderBonus[headshotBest][ROUND_LEADER_HEADSHOT_RATE], rateReward, sizeof(rateReward));
+            PrintToChatAll("\x05本局爆头率最高：\x03%N\x01，爆头率 %.1f%%（%d/%d）%s。",
                 headshotBest,
                 headshotRate,
                 g_iSIHeadshotKills[headshotBest],
-                g_iSIKills[headshotBest]
+                g_iSIKills[headshotBest],
+                rateReward
             );
         }
         else
@@ -899,8 +916,14 @@ Action ShowRoundStats(int client, bool showAll)
     int targetKills = GetFinisherTargetKillCount(client);
     float finisherRate = GetFinisherRate(client) * 100.0;
     float headshotRate = GetHeadshotRate(client) * 100.0;
+    float leaderBonus = CalculateRoundLeaderBonus(client);
     char finisherSample[24];
     char headshotSample[24];
+    char leaderReward[64];
+    if (leaderBonus > 0.0)
+    {
+        Format(leaderReward, sizeof(leaderReward), " | 榜首奖励 %.1f(压缩前)", leaderBonus);
+    }
     if (targetKills <= 0 || targetKills < GetFinisherMinimumKills())
     {
         strcopy(finisherSample, sizeof(finisherSample), "(样本不足)");
@@ -910,11 +933,12 @@ Action ShowRoundStats(int client, bool showAll)
         strcopy(headshotSample, sizeof(headshotSample), "(样本不足)");
     }
 
-    PrintToChat(client, "\x04[本关]\x01 评分 %.1f | 特杀 %d | 小尸 %d | 命中 %.0f%%",
+    PrintToChat(client, "\x04[本关]\x01 评分 %.1f | 特杀 %d | 小尸 %d | 命中 %.0f%%%s",
         score,
         g_iSIKills[client],
         g_iCommonKills[client],
-        accuracy
+        accuracy,
+        leaderReward
     );
 
     if (g_fTankRawDamage[client] > 0.0 || g_fTankDamage[client] > 0.0)
@@ -1020,6 +1044,15 @@ Action ShowRoundStats(int client, bool showAll)
         g_iAccuracyShots[client],
         accuracyBonus
     );
+
+    if (leaderBonus > 0.0)
+    {
+        PrintToChat(client, "\x04[榜首奖励]\x01 秒救 +%.1f | 绝杀率 +%.1f | 爆头率 +%.1f（压缩前）",
+            g_fRoundLeaderBonus[client][ROUND_LEADER_FAST_CLEAR],
+            g_fRoundLeaderBonus[client][ROUND_LEADER_FINISHER_RATE],
+            g_fRoundLeaderBonus[client][ROUND_LEADER_HEADSHOT_RATE]
+        );
+    }
 
     PrintToChat(client, "\x04[绝杀]\x01 H %d/%d | J %d/%d | 牛 %d/%d",
         g_iHunterFinisherKills[client],
@@ -1990,11 +2023,10 @@ bool IsValidCandidate(int client, float required)
     return true;
 }
 
-void AnnounceFastClearLeaders(float required)
+int FindFastClearLeaders(float required, int leaders[MAXPLAYERS + 1], int &leaderCount)
 {
     int bestCount = 0;
-    int leaderCount = 0;
-    int leaders[MAXPLAYERS + 1];
+    leaderCount = 0;
 
     for (int client = 1; client <= MaxClients; client++)
     {
@@ -2003,24 +2035,87 @@ void AnnounceFastClearLeaders(float required)
             continue;
         }
 
-        if (g_iFastClears[client] > bestCount)
+        int count = g_iFastClears[client];
+        if (count > bestCount)
         {
-            bestCount = g_iFastClears[client];
+            bestCount = count;
             leaderCount = 0;
             leaders[leaderCount++] = client;
         }
-        else if (bestCount > 0 && g_iFastClears[client] == bestCount)
+        else if (bestCount > 0 && count == bestCount)
         {
             leaders[leaderCount++] = client;
         }
     }
 
-    if (bestCount <= 0)
+    return bestCount;
+}
+
+void AwardRoundLeaderBonuses(float required)
+{
+    // Store settlement rewards once so live queries cannot change the leaders or add rewards twice.
+    for (int client = 1; client <= MaxClients; client++)
     {
-        return;
+        for (int category = 0; category < ROUND_LEADER_COUNT; category++)
+        {
+            g_fRoundLeaderBonus[client][category] = 0.0;
+        }
     }
 
-    AnnounceCountLeaders(leaders, leaderCount, bestCount, "秒救");
+    int leaders[MAXPLAYERS + 1];
+    int leaderCount;
+    if (FindFastClearLeaders(required, leaders, leaderCount) > 0)
+    {
+        float reward = g_hW_RoundLeader[ROUND_LEADER_FAST_CLEAR].FloatValue;
+        for (int index = 0; index < leaderCount; index++)
+        {
+            g_fRoundLeaderBonus[leaders[index]][ROUND_LEADER_FAST_CLEAR] = reward;
+        }
+    }
+
+    int finisherBest = FindBestFinisher(required);
+    if (finisherBest > 0 && GetFinisherKillCount(finisherBest) > 0)
+    {
+        g_fRoundLeaderBonus[finisherBest][ROUND_LEADER_FINISHER_RATE] = g_hW_RoundLeader[ROUND_LEADER_FINISHER_RATE].FloatValue;
+    }
+
+    int headshotBest = FindBestHeadshot(required);
+    if (headshotBest > 0 && g_iSIHeadshotKills[headshotBest] > 0)
+    {
+        g_fRoundLeaderBonus[headshotBest][ROUND_LEADER_HEADSHOT_RATE] = g_hW_RoundLeader[ROUND_LEADER_HEADSHOT_RATE].FloatValue;
+    }
+}
+
+float CalculateRoundLeaderBonus(int client)
+{
+    float bonus = 0.0;
+    for (int category = 0; category < ROUND_LEADER_COUNT; category++)
+    {
+        bonus += g_fRoundLeaderBonus[client][category];
+    }
+
+    return bonus;
+}
+
+void AnnounceFastClearLeaders(float required)
+{
+    int leaders[MAXPLAYERS + 1];
+    int leaderCount;
+    int bestCount = FindFastClearLeaders(required, leaders, leaderCount);
+    if (bestCount > 0)
+    {
+        AnnounceCountLeaders(leaders, leaderCount, bestCount, "秒救",
+            g_fRoundLeaderBonus[leaders[0]][ROUND_LEADER_FAST_CLEAR]);
+    }
+}
+
+void FormatRoundLeaderReward(float reward, char[] text, int maxlen)
+{
+    text[0] = '\0';
+    if (reward > 0.0)
+    {
+        Format(text, maxlen, "，奖励 +%.1f（压缩前）", reward);
+    }
 }
 
 void AnnounceFinisherAssistLeaders(float required)
@@ -2056,12 +2151,13 @@ void AnnounceFinisherAssistLeaders(float required)
     AnnounceCountLeaders(leaders, leaderCount, bestCount, "辅助绝杀");
 }
 
-void AnnounceCountLeaders(int leaders[MAXPLAYERS + 1], int leaderCount, int bestCount, const char[] metric)
+void AnnounceCountLeaders(int leaders[MAXPLAYERS + 1], int leaderCount, int bestCount, const char[] metric, float reward = 0.0)
 {
     char names[192];
     char playerName[MAX_NAME_LENGTH];
     bool hasName = false;
     names[0] = '\0';
+    int nameLimit = reward > 0.0 ? 144 : sizeof(names);
 
     for (int index = 0; index < leaderCount; index++)
     {
@@ -2074,9 +2170,9 @@ void AnnounceCountLeaders(int leaders[MAXPLAYERS + 1], int leaderCount, int best
         GetClientName(client, playerName, sizeof(playerName));
 
         int separatorLength = hasName ? strlen("、") : 0;
-        if (hasName && strlen(names) + separatorLength + strlen(playerName) >= sizeof(names))
+        if (hasName && strlen(names) + separatorLength + strlen(playerName) >= nameLimit)
         {
-            PrintCountLeaderLine(names, bestCount, metric);
+            PrintCountLeaderLine(names, bestCount, metric, reward);
             names[0] = '\0';
             hasName = false;
         }
@@ -2092,13 +2188,20 @@ void AnnounceCountLeaders(int leaders[MAXPLAYERS + 1], int leaderCount, int best
 
     if (hasName)
     {
-        PrintCountLeaderLine(names, bestCount, metric);
+        PrintCountLeaderLine(names, bestCount, metric, reward);
     }
 }
 
-void PrintCountLeaderLine(const char[] names, int bestCount, const char[] metric)
+void PrintCountLeaderLine(const char[] names, int bestCount, const char[] metric, float reward)
 {
-    PrintToChatAll("\x05本局%s最多：\x03%s\x01（\x03%d\x01 次）", metric, names, bestCount);
+    if (reward > 0.0)
+    {
+        PrintToChatAll("\x05本局%s最多：\x03%s\x01（\x03%d\x01 次），奖励 +%.1f（压缩前）", metric, names, bestCount, reward);
+    }
+    else
+    {
+        PrintToChatAll("\x05本局%s最多：\x03%s\x01（\x03%d\x01 次）", metric, names, bestCount);
+    }
 }
 
 int GetFinisherKillCount(int client)
@@ -2247,6 +2350,7 @@ float CalculateRoundScore(int client)
     score += float(g_iRockDestroys[client]) * g_hW_RockDestroy.FloatValue;
     score += CalculateAccuracyBonus(client);
     score += CalculateSkillBonus(client);
+    score += CalculateRoundLeaderBonus(client);
 
     score -= float(g_iControlsTaken[client]) * g_hP_Control.FloatValue;
     score -= g_fControlDuration[client] * g_hP_ControlTime.FloatValue;
@@ -3529,6 +3633,10 @@ void ClearClientRoundStats(int client)
     g_iChargerLevels[client] = 0;
     g_iFastClears[client] = 0;
     g_iSmokerSelfClears[client] = 0;
+    for (int category = 0; category < ROUND_LEADER_COUNT; category++)
+    {
+        g_fRoundLeaderBonus[client][category] = 0.0;
+    }
     g_iLastFastClearPinner[client] = 0;
     g_iLastFastClearVictim[client] = 0;
     g_fLastFastClearAt[client] = 0.0;
