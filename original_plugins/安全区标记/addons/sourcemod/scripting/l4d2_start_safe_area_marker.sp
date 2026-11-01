@@ -28,7 +28,7 @@
 public Plugin myinfo =
 {
     name        = "[L4D2] Start Safe Area Marker",
-    author      = "OpenAI / ChatGPT",
+    author      = "night",
     description = "Draws a persistent Scavenge-style hull around the starting safe area and removes it when the first Survivor leaves.",
     version     = PLUGIN_VERSION,
     url         = ""

@@ -1,5 +1,7 @@
 # [L4D2] Start Safe Area Marker v0.4.1 — Scavenge Style
 
+作者：night
+
 在战役开局安全区外围显示一圈类似清道夫模式的白色斜纹提示。第一名生还者被 Director 判定离开起始安全区后，整圈标记立即删除。
 
 ## v0.4.1 修复内容

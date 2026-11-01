@@ -10,7 +10,7 @@
 public Plugin myinfo =
 {
     name        = "[L4D2] Rescue Door Marker",
-    author      = "OpenAI / ChatGPT",
+    author      = "night",
     description = "Highlights unopened rescue-closet doors without changing door or rescue behavior.",
     version     = PLUGIN_VERSION,
     url         = ""
