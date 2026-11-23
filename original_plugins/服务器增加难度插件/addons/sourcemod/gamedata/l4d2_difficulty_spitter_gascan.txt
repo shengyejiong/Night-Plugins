@@ -1,0 +1,16 @@
+"Games"
+{
+	"left4dead2"
+	{
+		"Signatures"
+		{
+			// CInferno::IsTouching(CBaseEntity *, float, bool) const
+			"CInferno::IsTouching"
+			{
+				"library"	"server"
+				"linux"		"@_ZNK8CInferno10IsTouchingEP11CBaseEntityfb"
+				"windows"	"\x55\x8B\xEC\x83\xEC\x7C\xA1\x2A\x2A\x2A\x2A\x33\xC5\x89\x45\xFC\x53\x56\x8B\x75\x08"
+			}
+		}
+	}
+}

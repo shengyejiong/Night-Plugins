@@ -50,7 +50,7 @@ public Plugin myinfo =
     name = "L4D2 Multi-SI Campaign Experience",
     author = "night",
     description = "Round and long-term experience rating for multi-SI coop servers.",
-    version = "1.11.0",
+    version = "1.12.0",
     url = ""
 };
 
@@ -146,6 +146,7 @@ ConVar g_hWinLowScoreNegativeScale;
 ConVar g_hAllNegativeGuard;
 ConVar g_hAllNegativeMinPlayers;
 ConVar g_hAllNegativeScale;
+ConVar g_hRoundLeaderGuard;
 ConVar g_hEndgameOutsideDeathGuard;
 ConVar g_hEndgameOutsideDeathNegativeScale;
 ConVar g_hAnnounce;
@@ -347,6 +348,7 @@ public void OnPluginStart()
     g_hAllNegativeGuard = CreateConVar("l4d2_mexp_all_negative_guard", "1", "0=Disable, 1=Reduce rating loss when every valid player would lose rating after a win.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
     g_hAllNegativeMinPlayers = CreateConVar("l4d2_mexp_all_negative_min_players", "3", "Minimum valid players required for all-negative rating protection.", FCVAR_NOTIFY, true, 1.0);
     g_hAllNegativeScale = CreateConVar("l4d2_mexp_all_negative_scale", "0.10", "Rating weight scale for negative updates when all-negative protection triggers.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
+    g_hRoundLeaderGuard = CreateConVar("l4d2_mexp_round_leader_guard", "1", "Prevent long-term rating loss for the highest-scoring human players after a win.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
     g_hEndgameOutsideDeathGuard = CreateConVar("l4d2_mexp_endgame_outside_death_guard", "1", "0=Disable, 1=Protect long-term rating loss for outside-saferoom incaps/deaths after someone reaches end saferoom and the team wins.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
     g_hEndgameOutsideDeathNegativeScale = CreateConVar("l4d2_mexp_endgame_outside_death_negative_scale", "0.50", "Rating weight scale for negative updates caused by endgame outside-saferoom incaps/deaths.", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 
@@ -646,9 +648,11 @@ void FinalizeRound()
     AwardRoundLeaderBonuses(required);
 
     float ratingWeightScale = GetShortRoundWeightScale(duration);
+    bool roundLeaderGuardActive = g_bRoundEndedByWin && ratingWeightScale > 0.0 && g_hRoundLeaderGuard.BoolValue;
     float roundScores[MAXPLAYERS + 1];
     float teamScoreTotal = 0.0;
     int scoreCount = 0;
+    int bestHumanScoreTenths = cellmin;
 
     for (int client = 1; client <= MaxClients; client++)
     {
@@ -660,6 +664,16 @@ void FinalizeRound()
         roundScores[client] = CalculateRoundScore(client);
         teamScoreTotal += roundScores[client];
         scoreCount++;
+
+        if (roundLeaderGuardActive && !IsFakeClient(client))
+        {
+            // Use the same one-decimal precision as the settlement display for ties.
+            int scoreTenths = RoundToNearest(roundScores[client] * 10.0);
+            if (scoreTenths > bestHumanScoreTenths)
+            {
+                bestHumanScoreTenths = scoreTenths;
+            }
+        }
     }
 
     if (scoreCount <= 0)
@@ -729,7 +743,13 @@ void FinalizeRound()
             {
                 hasEndgameOutsideGuard = true;
             }
-            UpdateRating(client, roundScore, ratingWeightScale, playerNegativeWeightScale);
+            bool protectLeader = roundLeaderGuardActive && !IsFakeClient(client)
+                && RoundToNearest(roundScore * 10.0) == bestHumanScoreTenths;
+            bool leaderLossPrevented = UpdateRating(client, roundScore, ratingWeightScale, playerNegativeWeightScale, protectLeader);
+            if (leaderLossPrevented && g_hAnnounce.BoolValue)
+            {
+                PrintToChat(client, "\x04[经验]\x01 本关综合分第一，已免除本关长期经验扣分。");
+            }
         }
 
         if (roundScore > bestRoundScore)
@@ -2398,11 +2418,11 @@ float CalculateSkillBonus(int client)
     return bonus;
 }
 
-void UpdateRating(int client, float roundScore, float weightScale, float negativeWeightScale)
+bool UpdateRating(int client, float roundScore, float weightScale, float negativeWeightScale, bool protectLeader)
 {
     if (!EnsurePlayerRatingLoaded(client))
     {
-        return;
+        return false;
     }
 
     float target = roundScore * 10.0;
@@ -2410,9 +2430,10 @@ void UpdateRating(int client, float roundScore, float weightScale, float negativ
     float effectiveScale = ClampFloat(weightScale, 0.0, 1.0);
     if (baseWeight <= 0.0 || effectiveScale <= 0.0)
     {
-        return;
+        return false;
     }
 
+    bool leaderLossPrevented = false;
     if (target < g_fRating[client])
     {
         float protectedScale = ClampFloat(negativeWeightScale, 0.0, 1.0);
@@ -2420,17 +2441,16 @@ void UpdateRating(int client, float roundScore, float weightScale, float negativ
         {
             effectiveScale = protectedScale;
         }
+        leaderLossPrevented = protectLeader && effectiveScale > 0.0;
     }
 
-    if (effectiveScale <= 0.0)
+    if (effectiveScale > 0.0 && !leaderLossPrevented)
     {
-        g_iValidRounds[client]++;
-        return;
+        float weight = baseWeight * effectiveScale;
+        g_fRating[client] = (g_fRating[client] * (1.0 - weight)) + (target * weight);
     }
-
-    float weight = baseWeight * effectiveScale;
-    g_fRating[client] = (g_fRating[client] * (1.0 - weight)) + (target * weight);
     g_iValidRounds[client]++;
+    return leaderLossPrevented;
 }
 
 bool ShouldApplyAllNegativeGuard(const float roundScores[MAXPLAYERS + 1], float required, int scoreCount)

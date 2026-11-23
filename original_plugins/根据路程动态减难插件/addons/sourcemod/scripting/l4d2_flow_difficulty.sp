@@ -5,7 +5,7 @@
 #include <sdktools>
 #include <left4dhooks>
 
-#define PLUGIN_VERSION "1.8.2-night"
+#define PLUGIN_VERSION "1.8.3-night"
 #define SAMPLE_COUNT 5
 #define TEAM_SURVIVOR 2
 #define SETUP_RETRY_LOG_INTERVAL 30
@@ -30,6 +30,9 @@ static const char g_sStarterWeaponNames[STARTER_WEAPON_COUNT][] =
 	"UZI",
 	"消音冲锋枪"
 };
+
+// 顺序与武器候选池一致。鸟狙占 4/40，其余各占 9/40。
+static const int g_iStarterWeaponWeights[STARTER_WEAPON_COUNT] = {9, 9, 4, 9, 9};
 
 static const char g_sReviveSupplyClassnames[REVIVE_SUPPLY_COUNT][] =
 {
@@ -1083,7 +1086,7 @@ void GiveRandomStarterWeapon(int client, int serial)
 		return;
 	}
 
-	int weaponIndex = GetRandomInt(0, STARTER_WEAPON_COUNT - 1);
+	int weaponIndex = RollStarterWeaponIndex();
 	int weapon = GivePlayerItem(client, g_sStarterWeaponClassnames[weaponIndex]);
 	if (weapon == -1)
 	{
@@ -1101,6 +1104,26 @@ void GiveRandomStarterWeapon(int client, int serial)
 		"\x04[动态减难]\x05 已领取随机主武器：\x03%s\x05，备弹已补至当前上限。",
 		g_sStarterWeaponNames[weaponIndex]
 	);
+}
+
+int RollStarterWeaponIndex()
+{
+	int totalWeight = 0;
+	for (int i = 0; i < STARTER_WEAPON_COUNT; i++)
+	{
+		totalWeight += g_iStarterWeaponWeights[i];
+	}
+
+	int roll = GetRandomInt(1, totalWeight);
+	for (int i = 0; i < STARTER_WEAPON_COUNT - 1; i++)
+	{
+		roll -= g_iStarterWeaponWeights[i];
+		if (roll <= 0)
+		{
+			return i;
+		}
+	}
+	return STARTER_WEAPON_COUNT - 1;
 }
 
 void FillStarterWeaponReserveAmmo(int client, int weapon, int weaponIndex)

@@ -4,7 +4,7 @@
 #include <sdktools>
 #include <sdkhooks>
 #include <adminmenu>
-#define PLUGIN_VERSION "1.1.5+"
+#define PLUGIN_VERSION "1.1.6-night"
 #define CVAR_FLAGS FCVAR_NOTIFY
 
 #define IsValidClient(%1)		(1 <= %1 <= MaxClients && IsClientInGame(%1))
@@ -14,6 +14,7 @@ ConVar plugin_enable;
 ConVar sound_enable;
 ConVar pic_enable;
 int SoundSelect[MAXPLAYERS + 1];
+bool g_bSoundPreferenceReady[MAXPLAYERS + 1];
 char SavePath[256];
 new Handle:Time = INVALID_HANDLE;
 new Handle:sound_1 = INVALID_HANDLE;
@@ -41,19 +42,28 @@ new bool:IsVictimDeadPlayer[MAXPLAYERS+1] = { false, ... };
 public Plugin:myinfo = 
 {
 	name = "击中反馈的分支版本",
-	author = "TsukasaSato ,Hesh233(分支)",
+	author = "TsukasaSato, Hesh233, night",
 	description = "自定义击中和击杀的图标、声音、时长,可以通过!snd命令选择击中声音",
-	version = "PLUGIN_VERSION"
+	version = PLUGIN_VERSION
 }
 
 public OnPluginStart()
 {
-	LoadSndData();
 	decl String:Game_Name[64];
 	GetGameFolderName(Game_Name, sizeof(Game_Name));
 	if(!StrEqual(Game_Name, "left4dead2", false))
 	{
 		SetFailState("本插件仅支持L4D2!");
+	}
+
+	LoadSndData();
+	// 热重载时，已在线的玩家不会再次触发进服回调。
+	for (int client = 1; client <= MaxClients; client++)
+	{
+		if (IsValidClient(client) && !IsFakeClient(client) && IsClientAuthorized(client))
+		{
+			LoadSoundPreference(client);
+		}
 	}
 
 	CreateConVar("l4d2_hitsound", PLUGIN_VERSION, "Plugin version", 0);
@@ -88,6 +98,16 @@ public OnPluginStart()
 }
 public Action MenuFunc_Snd(int client, int args)
 {
+	if (!IsValidClient(client) || IsFakeClient(client))
+	{
+		return Plugin_Handled;
+	}
+	if (!g_bSoundPreferenceReady[client] && !LoadSoundPreference(client))
+	{
+		ReplyToCommand(client, "[命中反馈] Steam 身份尚未验证，请稍后再输入 !snd。");
+		return Plugin_Handled;
+	}
+
 	Handle menu = CreateMenu(MenuHandler_MainMenu);
 	char line[1024];
 	Format(line, sizeof(line), "*********************\n*——选择击中音效——*\n*********************\n当前选择是: %d" ,SoundSelect[client] + 1);//, SoundSelect[client]
@@ -104,7 +124,7 @@ public int MenuHandler_MainMenu(Handle menu, MenuAction action, int client, int 
 	if (action == MenuAction_End)	
 		CloseHandle(menu);
 
-	if(action == MenuAction_Select)
+	if (action == MenuAction_Select && IsValidClient(client) && g_bSoundPreferenceReady[client])
 	{
 		switch(item)
 		{
@@ -124,58 +144,87 @@ public int MenuHandler_MainMenu(Handle menu, MenuAction action, int client, int 
 					SoundSelect[client] = 2;
 					PrintToChat(client,"使用自定义击杀及击中反馈");
 				}
+			default: return 0;
+		}
+		if (!SaveSoundPreference(client))
+		{
+			PrintToChat(client, "[命中反馈] 设置已在本次连接生效，但未能保存。请稍后重试或联系管理员。");
 		}
 	}
+	return 0;
 }
-public void OnClientPutInServer(int client)
+public void OnClientPostAdminCheck(int client)
 {
-	if(!IsFakeClient(client))
+	if (!IsFakeClient(client) && !g_bSoundPreferenceReady[client])
 	{
-		SoundSelect[client] = 0;
-		ClientSaveToFileLoad(client);		
+		LoadSoundPreference(client);
 	}
 }
 
 public void OnClientDisconnect(int client)
 {
-	if(!IsFakeClient(client))
-	{
-		ClientSaveToFileSave(client);
-	}
+	g_bSoundPreferenceReady[client] = false;
+	SoundSelect[client] = 0;
 }
+
 void LoadSndData()
 {
 	SoundStore = CreateKeyValues("SoundSelect");
-	BuildPath(Path_SM, SavePath, 255, "data/SoundSelect.txt");
-
-	if (FileExists(SavePath))
-		FileToKeyValues(SoundStore, SavePath);
-	else
-		KeyValuesToFile(SoundStore, SavePath);
-
+	BuildPath(Path_SM, SavePath, sizeof(SavePath), "data/SoundSelect.txt");
+	if (FileExists(SavePath) && !FileToKeyValues(SoundStore, SavePath))
+	{
+		SetFailState("无法读取命中反馈存档，未改动原文件：%s", SavePath);
+	}
 }
-public void ClientSaveToFileSave(int client)
-{
-	char user_id[128]="";
-	GetClientAuthId(client, AuthId_Engine, user_id, sizeof(user_id), true);
 
-	KvJumpToKey(SoundStore, user_id, true);
+bool SaveSoundPreference(int client)
+{
+	char userId[128];
+	if (!GetClientAuthId(client, AuthId_Engine, userId, sizeof(userId), true) || userId[0] == '\0')
+	{
+		LogError("无法获取已验证的 Steam ID，命中反馈设置未保存。");
+		return false;
+	}
+
+	KvRewind(SoundStore);
+	if (!KvJumpToKey(SoundStore, userId, true))
+	{
+		LogError("无法更新命中反馈存档中的玩家记录：%s", SavePath);
+		return false;
+	}
 	KvSetNum(SoundStore, "Snd", SoundSelect[client]);
-
-	KvGoBack(SoundStore);
 	KvRewind(SoundStore);
-	KeyValuesToFile(SoundStore, SavePath);
+	if (!KeyValuesToFile(SoundStore, SavePath))
+	{
+		LogError("无法写入命中反馈存档：%s", SavePath);
+		return false;
+	}
+	return true;
 }
-public void ClientSaveToFileLoad(int client)
+
+bool LoadSoundPreference(int client)
 {
-	char user_id[128]="";
-	GetClientAuthId(client, AuthId_Engine, user_id, sizeof(user_id), true);
+	char userId[128];
+	if (!GetClientAuthId(client, AuthId_Engine, userId, sizeof(userId), true) || userId[0] == '\0')
+	{
+		return false;
+	}
 
-	KvJumpToKey(SoundStore, user_id, true);
-	SoundSelect[client] = KvGetNum(SoundStore, "Snd", 0);
-
-	KvGoBack(SoundStore);
 	KvRewind(SoundStore);
+	int selection = 0;
+	if (KvJumpToKey(SoundStore, userId, false))
+	{
+		selection = KvGetNum(SoundStore, "Snd", 0);
+		KvRewind(SoundStore);
+	}
+	SoundSelect[client] = (0 <= selection <= 2) ? selection : 0;
+	g_bSoundPreferenceReady[client] = true;
+	return true;
+}
+
+bool CanShowHitFeedback(int client)
+{
+	return IsValidClient(client) && g_bSoundPreferenceReady[client] && SoundSelect[client] != 1;
 }
 public void Event_Spawn(Event event, const char[] name, bool dontBroadcast)
 {
@@ -222,7 +271,7 @@ public Action:Event_PlayerDeath(Handle:event, const String:name[], bool:dontBroa
 			{
 				if(GetClientTeam(attacker) == 2)	
 				{
-					if(!IsFakeClient(attacker))
+					if(CanShowHitFeedback(attacker))
 					{
 						if(IsHeatshout)
 						{
@@ -325,7 +374,7 @@ public Action:Event_PlayerHurt(Handle:event, const String:name[], bool:dontBroad
 					{
 						IsVictimDeadPlayer[victim] = true;
 					}
-					if(IsVictimDeadPlayer[victim] == false)
+					if(IsVictimDeadPlayer[victim] == false && CanShowHitFeedback(attacker))
 					{
 					if (GetConVarInt(pic_enable) == 1)
 					{
@@ -381,7 +430,7 @@ public Action:Event_InfectedDeath(Handle:event, const String:name[], bool:dontBr
 	if(GetConVarInt(g_blast) == 0 && damagetype)
     return Plugin_Changed;
 
-	if(IsValidClient(attacker))
+	if(CanShowHitFeedback(attacker))
 	{
 	if (IsHeatshout)
 	{
@@ -510,7 +559,7 @@ public Action:Event_InfectedHurt(Handle:event, String:event_name[], bool:dontBro
 	if(GetConVarInt(g_blast) == 0 && damagetype & DMG_BLAST)
         return Plugin_Changed;
 
-	if(IsValidClient(attacker))
+	if(CanShowHitFeedback(attacker))
 	{
 	if(!IsFakeClient(attacker))
 		{
@@ -615,8 +664,7 @@ public Action:task_Clean(Handle:Timer, any:client)
 
 public void ShowKillMessage(int client, int type)
 {
-	// SoundSelect == 1 表示该玩家关闭了命中反馈，声音和图标都不显示。
-	if (!IsValidClient(client) || SoundSelect[client] == 1)
+	if (!CanShowHitFeedback(client))
 	{
 		return;
 	}

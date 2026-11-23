@@ -4,6 +4,7 @@
 #include <sourcemod>
 #include <sdktools>
 #include <sdkhooks>
+#include <dhooks>
 #include <left4dhooks>
 #include <left4dhooks_anim>
 #include <actions>
@@ -12,8 +13,8 @@
 #include <godframecontrol>
 
 #define TEAM_INFECTED 3
-#define Z_SMOKER 1
 #define Z_HUNTER 3
+#define Z_JOCKEY 5
 #define Z_CHARGER 6
 #define Z_TANK 8
 
@@ -21,8 +22,6 @@
 #define HUNTER_REPEAT_ATTACK_CHANCE 4
 #define HUNTER_ATTACK_COOLDOWN 0.5
 #define HUNTER_AIR_SPEED 450.0
-#define SMOKER_TONGUE_DISTANCE_PERCENT 0.80
-#define SMOKER_TONGUE_COMMAND_INTERVAL 0.3
 #define CHARGER_INCAP_PUMMEL_DAMAGE 30.0
 #define SURVIVOR_RUNSPEED 220.0
 #define ROCK_HISTORY_FRAMES 100
@@ -86,10 +85,8 @@ enum MergedGetupAnimStateFlag
 ConVar g_cvSmartAiRock;
 ConVar g_cvHunterNoDeadstop;
 ConVar g_cvAiHunterPounce;
-ConVar g_cvAiSmokerTongue;
 ConVar g_cvTongueFloatFix;
 ConVar g_cvSiShoveDirectionFix;
-ConVar g_cvTongueRange;
 ConVar g_cvChargerIncapPummel;
 ConVar g_cvChargerPoundDamage;
 ConVar g_cvTankChargerShoveFix;
@@ -108,10 +105,10 @@ ConVar g_cvSurvivorLimpHealth;
 ConVar g_cvJockeyMinMountedSpeed;
 ConVar g_cvCommonShoveFix;
 ConVar g_cvMultiGetupFix;
+ConVar g_cvQuietChat;
 char g_sPersistentStatePath[PLATFORM_MAX_PATH];
 float g_fHunterDelay[MAXPLAYERS + 1][3];
 int g_iHunterState[MAXPLAYERS + 1][3];
-float g_fSmokerNextTongue[MAXPLAYERS + 1];
 ArrayList g_aRockEntities;
 bool g_bTankWaterNoSlowdownActive;
 int g_iIncapEventTick[MAXPLAYERS + 1];
@@ -140,12 +137,21 @@ int g_iStaggerDirectionPlayerAnimStateOffset;
 int g_iStaggerDirectionEyeYawOffset;
 bool g_bStaggerDirectionAvailable;
 
+#include "tankdiff_jockey_ride_hitbox.inc"
+#include "tankdiff_invisible_deathspit.inc"
+#include "tankdiff_ellis_hunter_getup.inc"
+#include "tankdiff_tank_punch_force_primary.inc"
+#include "tankdiff_ai_tank_prop_cleanup.inc"
+#include "tankdiff_block_autoaim.inc"
+#include "tankdiff_texture_check.inc"
+#include "tankdiff_spitter_gascan.inc"
+
 public Plugin myinfo =
 {
 	name = "L4D2 Campaign Difficulty Options",
-	author = "Visor, A1m, Forgetest, CanadaRox, night",
+	author = "Visor, A1m, Forgetest, CanadaRox, Sir, Harry Potter, Derpduck, night",
 	description = "AI Tank rock aim recovery and Special Infected options for campaign servers",
-	version = "4.4.0",
+	version = "4.4.15",
 	url = ""
 };
 
@@ -376,10 +382,8 @@ public void OnPluginStart()
 	g_cvSmartAiRock = CreateConVar("l4d2_difficulty_smart_ai_rock", "1", "1=AI Tank 扔石头后恢复追踪目标，0=关闭", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 	g_cvHunterNoDeadstop = CreateConVar("l4d2_difficulty_hunter_no_deadstop", "0", "1=未扑中目标的 Hunter 空中不能被推，0=关闭", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 	g_cvAiHunterPounce = CreateConVar("l4d2_difficulty_ai_hunter_pounce", "0", "1=增强 AI Hunter 的连续跳扑和空中调整，0=关闭", FCVAR_NOTIFY, true, 0.0, true, 1.0);
-	g_cvAiSmokerTongue = CreateConVar("l4d2_difficulty_ai_smoker_tongue", "0", "1=增强 AI Smoker 的瞄准和主动伸舌，0=关闭", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 	g_cvTongueFloatFix = CreateConVar("l4d2_difficulty_tongue_float_fix", "1", "1=修复 Smoker 舌头刚抓住生还者时异常立即吊起，0=关闭", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 	g_cvSiShoveDirectionFix = CreateConVar("l4d2_difficulty_si_shove_direction_fix", "1", "1=修复特感被幸存者推击时的踉跄动画方向，0=关闭", FCVAR_NOTIFY, true, 0.0, true, 1.0);
-	g_cvTongueRange = FindConVar("tongue_range");
 	g_cvChargerIncapPummel = CreateConVar("l4d2_difficulty_charger_incap_pummel", "0", "1=Charger 对倒地目标的锤击伤害固定为30，0=关闭", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 	g_cvChargerPoundDamage = FindConVar("z_charger_pound_dmg");
 	g_cvTankChargerShoveFix = CreateConVar("l4d2_difficulty_tank_charger_shove_fix", "1", "1=幸存者推击不减速 Tank 和 Charger，0=关闭", FCVAR_NOTIFY, true, 0.0, true, 1.0);
@@ -398,9 +402,19 @@ public void OnPluginStart()
 	g_cvJockeyMinMountedSpeed = FindConVar("z_jockey_min_mounted_speed");
 	g_cvCommonShoveFix = CreateConVar("l4d2_difficulty_common_shove_fix", "1", "1=修复普通感染者蹲伏、下落、落地和爬梯时无法正常被推，0=关闭", FCVAR_NOTIFY, true, 0.0, true, 1.0);
 	g_cvMultiGetupFix = CreateConVar("l4d2_difficulty_multi_getup_fix", "1", "1=启用完整的多人重复/遗漏起身修复，0=关闭", FCVAR_NOTIFY, true, 0.0, true, 1.0);
+	g_cvQuietChat = CreateConVar("l4d2_difficulty_quiet_chat", "1", "1=隐藏服务器变量变更广播和 ! 命令原文，0=关闭", FCVAR_NONE, true, 0.0, true, 1.0);
+
 	InitializeMergedGetupFix();
 	InitializeCommonShoveFix();
 	InitializeStaggerDirectionFix();
+	InitializeJockeyRideHitboxFix();
+	InitializeInvisibleDeathSpitFix();
+	InitializeEllisHunterGetupFix();
+	InitializeTankPunchForcePrimary();
+	InitializeAiTankPropCleanup();
+	InitializeBlockAutoaim();
+	InitializeTextureCheck();
+	InitializeSpitterGascan();
 
 	g_aRockEntities = new ArrayList(ROCK_BLOCK_COUNT);
 
@@ -409,7 +423,11 @@ public void OnPluginStart()
 	RegConsoleCmd("sm_tankdifficulty", Command_DifficultyMenu, "打开战役难度选项菜单");
 
 	BuildPath(Path_SM, g_sPersistentStatePath, sizeof(g_sPersistentStatePath), "data/l4d2_campaign_difficulty_options_state.cfg");
+	HookEvent("server_cvar", Event_QuietChatServerCvar, EventHookMode_Pre);
 	HookEvent("round_start", Event_RoundStart, EventHookMode_PostNoCopy);
+	HookEvent("round_end", SpitGascan_OnRoundEnd, EventHookMode_PostNoCopy);
+	HookEvent("mission_lost", SpitGascan_OnRoundEnd, EventHookMode_PostNoCopy);
+	HookEvent("map_transition", SpitGascan_OnRoundEnd, EventHookMode_PostNoCopy);
 	HookEvent("player_spawn", Event_PlayerSpawn, EventHookMode_Post);
 	HookEvent("player_hurt", Event_PlayerHurt, EventHookMode_Post);
 	HookEvent("tank_spawn", Event_TankSpawn, EventHookMode_PostNoCopy);
@@ -432,6 +450,7 @@ public void OnPluginStart()
 		if (IsClientInGame(client))
 		{
 			SDKHook(client, SDKHook_OnTakeDamage, Hook_OnTakeDamage);
+			HookSpitterGascanClient(client);
 		}
 	}
 	AutoExecConfig(true, "l4d2_campaign_difficulty_options");
@@ -439,7 +458,9 @@ public void OnPluginStart()
 
 public void OnClientPutInServer(int client)
 {
+	ResetClientTextureQuery(client);
 	SDKHook(client, SDKHook_OnTakeDamage, Hook_OnTakeDamage);
+	HookSpitterGascanClient(client);
 	g_iIncapEventTick[client] = 0;
 	g_iSavedIncapState[client] = 0;
 	g_bTemporarilyClearedIncap[client] = false;
@@ -449,6 +470,9 @@ public void OnClientPutInServer(int client)
 
 public void OnClientDisconnect(int client)
 {
+	ResetClientTextureQuery(client);
+	ClearEllisHunterGetup(client);
+	ClearJockeyRideHitboxForClient(client);
 	g_iIncapEventTick[client] = 0;
 	g_iSavedIncapState[client] = 0;
 	g_bTemporarilyClearedIncap[client] = false;
@@ -458,6 +482,8 @@ public void OnClientDisconnect(int client)
 
 public void OnMapStart()
 {
+	StartSpitterGascanRound();
+	ResetAiTankPropCleanup();
 	ClearTrackedRocks();
 	g_bTankWaterNoSlowdownActive = false;
 	ResetAllTankFlyingIncapState();
@@ -465,8 +491,26 @@ public void OnMapStart()
 	ResetAllMergedGetupState();
 }
 
+public void OnMapEnd()
+{
+	SetSpitterGascanMapReady(false);
+	SetTextureCheckMapReady(false);
+	ResetAiTankPropCleanup();
+	ClearAllEllisHunterGetups();
+	ClearPendingInvisibleDeathSpit();
+	g_iDeathSpitProjectileDepth = 0;
+	StopAllJockeyRideHitboxes();
+}
+
 public void OnPluginEnd()
 {
+	ShutdownSpitterGascan();
+	SetTextureCheckMapReady(false);
+	ShutdownBlockAutoaim();
+	ShutdownAiTankPropCleanup();
+	ClearAllEllisHunterGetups();
+	ShutdownInvisibleDeathSpitFix();
+	StopAllJockeyRideHitboxes();
 	ClearTrackedRocks();
 	ResetAllMultiGetupState();
 	ResetAllMergedGetupState();
@@ -474,6 +518,9 @@ public void OnPluginEnd()
 
 public void OnEntityCreated(int entity, const char[] classname)
 {
+	TrackAiTankCleanupPropCreated(entity, classname);
+	TrackInvisibleDeathSpit(entity, classname);
+	TrackSpitterGascanAcidCreated(entity, classname);
 	if (!StrEqual(classname, "tank_rock"))
 	{
 		return;
@@ -501,6 +548,7 @@ public void OnRockSpawnPost(int entity)
 
 public void OnEntityDestroyed(int entity)
 {
+	InvisibleDeathSpitOnDestroyed(entity);
 	if (IsRock(entity))
 	{
 		RemoveTrackedRock(EntIndexToEntRef(entity));
@@ -537,6 +585,11 @@ public void OnGameFrame()
 public void OnConfigsExecuted()
 {
 	LoadPersistentSettings();
+	RefreshJockeyRideHitboxes();
+	RefreshInvisibleDeathSpitFix();
+	RefreshBlockAutoaim();
+	SetTextureCheckMapReady(true);
+	SetSpitterGascanMapReady(true);
 	RefreshTankWaterNoSlowdownState(false);
 }
 
@@ -563,16 +616,22 @@ void LoadPersistentSettings()
 			g_cvAiHunterPounce.BoolValue = aiHunterPounce != 0;
 		}
 
-		int aiSmokerTongue = state.GetNum("ai_smoker_tongue", -1);
-		if (aiSmokerTongue != -1)
-		{
-			g_cvAiSmokerTongue.BoolValue = aiSmokerTongue != 0;
-		}
-
 		int tongueFloatFix = state.GetNum("tongue_float_fix", -1);
 		if (tongueFloatFix != -1)
 		{
 			g_cvTongueFloatFix.BoolValue = tongueFloatFix != 0;
+		}
+
+		int jockeyRideHitboxFix = state.GetNum("jockey_ride_hitbox_fix", -1);
+		if (jockeyRideHitboxFix != -1)
+		{
+			g_cvJockeyRideHitboxFix.BoolValue = jockeyRideHitboxFix != 0;
+		}
+
+		int invisibleDeathSpitFix = state.GetNum("invisible_deathspit_fix", -1);
+		if (invisibleDeathSpitFix != -1)
+		{
+			g_cvInvisibleDeathSpitFix.BoolValue = invisibleDeathSpitFix != 0;
 		}
 
 		int siShoveDirectionFix = state.GetNum("si_shove_direction_fix", -1);
@@ -597,6 +656,42 @@ void LoadPersistentSettings()
 		if (tankMeleeFury != -1)
 		{
 			g_cvTankMeleeFury.BoolValue = tankMeleeFury != 0;
+		}
+
+		int tankPunchForcePrimary = state.GetNum("tank_punch_force_primary", -1);
+		if (tankPunchForcePrimary != -1)
+		{
+			g_cvTankPunchForcePrimary.BoolValue = tankPunchForcePrimary != 0;
+		}
+
+		int aiTankPropCleanup = state.GetNum("ai_tank_prop_cleanup", -1);
+		if (aiTankPropCleanup != -1)
+		{
+			g_cvAiTankPropCleanup.BoolValue = aiTankPropCleanup != 0;
+		}
+
+		int blockAutoaim = state.GetNum("block_autoaim", -1);
+		if (blockAutoaim != -1)
+		{
+			g_cvBlockAutoaim.BoolValue = blockAutoaim != 0;
+		}
+
+		int textureCheck = state.GetNum("texture_check", -1);
+		if (textureCheck != -1)
+		{
+			g_cvTextureCheck.BoolValue = textureCheck != 0;
+		}
+
+		int quietChat = state.GetNum("quiet_chat", -1);
+		if (quietChat != -1)
+		{
+			g_cvQuietChat.BoolValue = quietChat != 0;
+		}
+
+		int spitterGascan = state.GetNum("spitter_gascan", -1);
+		if (spitterGascan != -1)
+		{
+			g_cvSpitterGascan.BoolValue = spitterGascan != 0;
 		}
 
 		int rockLagComp = state.GetNum("rock_lagcomp", -1);
@@ -628,6 +723,12 @@ void LoadPersistentSettings()
 		{
 			g_cvMultiGetupFix.BoolValue = multiGetupFix != 0;
 		}
+
+		int ellisHunterGetupFix = state.GetNum("ellis_hunter_getup_fix", -1);
+		if (ellisHunterGetupFix != -1)
+		{
+			g_cvEllisHunterGetupFix.BoolValue = ellisHunterGetupFix != 0;
+		}
 	}
 	delete state;
 }
@@ -639,17 +740,25 @@ void SavePersistentSettings()
 	state.SetNum("smart_ai_rock", g_cvSmartAiRock.BoolValue ? 1 : 0);
 	state.SetNum("hunter_no_deadstop", g_cvHunterNoDeadstop.BoolValue ? 1 : 0);
 	state.SetNum("ai_hunter_pounce", g_cvAiHunterPounce.BoolValue ? 1 : 0);
-	state.SetNum("ai_smoker_tongue", g_cvAiSmokerTongue.BoolValue ? 1 : 0);
 	state.SetNum("tongue_float_fix", g_cvTongueFloatFix.BoolValue ? 1 : 0);
+	state.SetNum("jockey_ride_hitbox_fix", g_cvJockeyRideHitboxFix.BoolValue ? 1 : 0);
+	state.SetNum("invisible_deathspit_fix", g_cvInvisibleDeathSpitFix.BoolValue ? 1 : 0);
 	state.SetNum("si_shove_direction_fix", g_cvSiShoveDirectionFix.BoolValue ? 1 : 0);
 	state.SetNum("charger_incap_pummel", g_cvChargerIncapPummel.BoolValue ? 1 : 0);
 	state.SetNum("tank_charger_shove_fix", g_cvTankChargerShoveFix.BoolValue ? 1 : 0);
 	state.SetNum("tank_melee_fury", g_cvTankMeleeFury.BoolValue ? 1 : 0);
+	state.SetNum("tank_punch_force_primary", g_cvTankPunchForcePrimary.BoolValue ? 1 : 0);
+	state.SetNum("ai_tank_prop_cleanup", g_cvAiTankPropCleanup.BoolValue ? 1 : 0);
+	state.SetNum("block_autoaim", g_cvBlockAutoaim.BoolValue ? 1 : 0);
+	state.SetNum("texture_check", g_cvTextureCheck.BoolValue ? 1 : 0);
+	state.SetNum("quiet_chat", g_cvQuietChat.BoolValue ? 1 : 0);
+	state.SetNum("spitter_gascan", g_cvSpitterGascan.BoolValue ? 1 : 0);
 	state.SetNum("rock_lagcomp", g_cvRockLagComp.BoolValue ? 1 : 0);
 	state.SetNum("tank_water_no_slowdown", g_cvTankWaterNoSlowdown.BoolValue ? 1 : 0);
 	state.SetNum("tank_flying_incap", g_cvTankFlyingIncap.BoolValue ? 1 : 0);
 	state.SetNum("common_shove_fix", g_cvCommonShoveFix.BoolValue ? 1 : 0);
 	state.SetNum("multi_getup_fix", g_cvMultiGetupFix.BoolValue ? 1 : 0);
+	state.SetNum("ellis_hunter_getup_fix", g_cvEllisHunterGetupFix.BoolValue ? 1 : 0);
 	state.Rewind();
 	state.ExportToFile(g_sPersistentStatePath);
 	delete state;
@@ -746,6 +855,31 @@ bool CommonShoveForceLandingInterruptible(int infected)
 	return false;
 }
 
+bool CanToggleQuietChat(int client)
+{
+	return CheckCommandAccess(client, "tankdiff_quiet_chat", ADMFLAG_CONVARS, true);
+}
+
+public Action Event_QuietChatServerCvar(Event event, const char[] name, bool dontBroadcast)
+{
+	if (g_cvQuietChat.BoolValue)
+	{
+		// 只取消客户端广播，其他服务器插件仍能接收该事件。
+		event.BroadcastDisabled = true;
+	}
+	return Plugin_Continue;
+}
+
+public Action OnClientSayCommand(int client, const char[] command, const char[] sArgs)
+{
+	// SourceMod 已识别并缓存命令；Handled 只跳过游戏的原文显示，命令仍在后置阶段执行。
+	if (client > 0 && g_cvQuietChat.BoolValue && sArgs[0] == '!' && IsChatTrigger())
+	{
+		return Plugin_Handled;
+	}
+	return Plugin_Continue;
+}
+
 public Action Command_DifficultyMenu(int client, int args)
 {
 	if (client <= 0 || !IsClientInGame(client))
@@ -773,11 +907,17 @@ void ShowDifficultyMenu(int client)
 	Format(display, sizeof(display), "AI Hunter 跳扑增强：%s", g_cvAiHunterPounce.BoolValue ? "开启" : "关闭");
 	menu.AddItem("ai_hunter_pounce", display);
 
-	Format(display, sizeof(display), "AI Smoker 主动伸舌增强：%s", g_cvAiSmokerTongue.BoolValue ? "开启" : "关闭");
-	menu.AddItem("ai_smoker_tongue", display);
-
 	Format(display, sizeof(display), "Smoker 舌头立即吊起修复：%s", g_cvTongueFloatFix.BoolValue ? "开启" : "关闭");
 	menu.AddItem("tongue_float_fix", display);
+
+	bool jockeyRideHitboxAvailable = g_iJockeyRideIkOffset > 0;
+	Format(display, sizeof(display), "Jockey 骑人命中框修复：%s",
+		jockeyRideHitboxAvailable ? (g_cvJockeyRideHitboxFix.BoolValue ? "开启" : "关闭") : "不可用");
+	menu.AddItem("jockey_ride_hitbox_fix", display, jockeyRideHitboxAvailable ? ITEMDRAW_DEFAULT : ITEMDRAW_DISABLED);
+
+	Format(display, sizeof(display), "Spitter 隐形死酸修复：%s",
+		g_bInvisibleDeathSpitAvailable ? (g_cvInvisibleDeathSpitFix.BoolValue ? "开启" : "关闭") : "不可用");
+	menu.AddItem("invisible_deathspit_fix", display, g_bInvisibleDeathSpitAvailable ? ITEMDRAW_DEFAULT : ITEMDRAW_DISABLED);
 
 	if (g_bStaggerDirectionAvailable)
 	{
@@ -799,6 +939,24 @@ void ShowDifficultyMenu(int client)
 	Format(display, sizeof(display), "Tank 近战反制（无上限）：%s", g_cvTankMeleeFury.BoolValue ? "开启" : "关闭");
 	menu.AddItem("tank_melee_fury", display);
 
+	Format(display, sizeof(display), "持近战挨 Tank 拳后切主枪：%s", g_cvTankPunchForcePrimary.BoolValue ? "开启" : "关闭");
+	menu.AddItem("tank_punch_force_primary", display);
+
+	Format(display, sizeof(display), "AI Tank 战后清理打过的物件：%s", g_cvAiTankPropCleanup.BoolValue ? "开启" : "关闭");
+	menu.AddItem("ai_tank_prop_cleanup", display);
+
+	bool blockAutoaimAvailable = IsBlockAutoaimAvailable();
+	bool canToggleBlockAutoaim = CanToggleBlockAutoaim(client);
+	Format(display, sizeof(display), "禁用原生辅助瞄准：%s%s",
+		blockAutoaimAvailable ? (IsBlockAutoaimActive() ? "开启" : "关闭") : "不可用",
+		canToggleBlockAutoaim ? "" : "（仅管理员可改）");
+	menu.AddItem("block_autoaim", display, blockAutoaimAvailable && canToggleBlockAutoaim ? ITEMDRAW_DEFAULT : ITEMDRAW_DISABLED);
+
+	bool canToggleTextureCheck = CanToggleTextureCheck(client);
+	Format(display, sizeof(display), "材质调试项检查：%s%s",
+		g_cvTextureCheck.BoolValue ? "开启" : "关闭", canToggleTextureCheck ? "" : "（仅管理员可改）");
+	menu.AddItem("texture_check", display, canToggleTextureCheck ? ITEMDRAW_DEFAULT : ITEMDRAW_DISABLED);
+
 	Format(display, sizeof(display), "Tank 石头空爆与延迟补偿：%s", g_cvRockLagComp.BoolValue ? "开启" : "关闭");
 	menu.AddItem("rock_lagcomp", display);
 
@@ -813,6 +971,21 @@ void ShowDifficultyMenu(int client)
 
 	Format(display, sizeof(display), "重复/遗漏起身修复（多人）：%s", g_cvMultiGetupFix.BoolValue ? "开启" : "关闭");
 	menu.AddItem("multi_getup_fix", display);
+
+	Format(display, sizeof(display), "Ellis 被 Hunter 扑后起身统一：%s", g_cvEllisHunterGetupFix.BoolValue ? "开启" : "关闭");
+	menu.AddItem("ellis_hunter_getup_fix", display);
+
+	bool canToggleQuietChat = CanToggleQuietChat(client);
+	Format(display, sizeof(display), "隐藏变量变更和 ! 命令原文：%s%s",
+		g_cvQuietChat.BoolValue ? "开启" : "关闭", canToggleQuietChat ? "" : "（仅管理员可改）");
+	menu.AddItem("quiet_chat", display, canToggleQuietChat ? ITEMDRAW_DEFAULT : ITEMDRAW_DISABLED);
+
+	bool spitterGascanAvailable = IsSpitterGascanAvailable();
+	bool canToggleSpitterGascan = CanToggleSpitterGascan(client);
+	Format(display, sizeof(display), "Spitter 酸液点燃油桶：%s%s",
+		spitterGascanAvailable ? (g_cvSpitterGascan.BoolValue ? "开启" : "关闭") : "不可用",
+		canToggleSpitterGascan ? "" : "（仅管理员可改）");
+	menu.AddItem("spitter_gascan", display, spitterGascanAvailable && canToggleSpitterGascan ? ITEMDRAW_DEFAULT : ITEMDRAW_DISABLED);
 
 	menu.ExitButton = true;
 	menu.Display(client, MENU_TIME_FOREVER);
@@ -844,18 +1017,23 @@ public int DifficultyMenuHandler(Menu menu, MenuAction action, int client, int i
 			SavePersistentSettings();
 			PrintToChat(client, "\x04[难度]\x01 AI Hunter 跳扑增强已%s。", g_cvAiHunterPounce.BoolValue ? "开启" : "关闭");
 		}
-		else if (StrEqual(info, "ai_smoker_tongue"))
-		{
-			g_cvAiSmokerTongue.BoolValue = !g_cvAiSmokerTongue.BoolValue;
-			ResetAllSmokerTongueState();
-			SavePersistentSettings();
-			PrintToChat(client, "\x04[难度]\x01 AI Smoker 主动伸舌增强已%s。", g_cvAiSmokerTongue.BoolValue ? "开启" : "关闭");
-		}
 		else if (StrEqual(info, "tongue_float_fix"))
 		{
 			g_cvTongueFloatFix.BoolValue = !g_cvTongueFloatFix.BoolValue;
 			SavePersistentSettings();
 			PrintToChat(client, "\x04[难度]\x01 Smoker 舌头立即吊起修复已%s。", g_cvTongueFloatFix.BoolValue ? "开启" : "关闭");
+		}
+		else if (StrEqual(info, "jockey_ride_hitbox_fix") && g_iJockeyRideIkOffset > 0)
+		{
+			g_cvJockeyRideHitboxFix.BoolValue = !g_cvJockeyRideHitboxFix.BoolValue;
+			SavePersistentSettings();
+			PrintToChat(client, "\x04[难度]\x01 Jockey 骑人命中框修复已%s。", g_cvJockeyRideHitboxFix.BoolValue ? "开启" : "关闭");
+		}
+		else if (StrEqual(info, "invisible_deathspit_fix") && g_bInvisibleDeathSpitAvailable)
+		{
+			g_cvInvisibleDeathSpitFix.BoolValue = !g_cvInvisibleDeathSpitFix.BoolValue;
+			SavePersistentSettings();
+			PrintToChat(client, "\x04[难度]\x01 Spitter 隐形死酸修复已%s。", g_cvInvisibleDeathSpitFix.BoolValue ? "开启" : "关闭");
 		}
 		else if (StrEqual(info, "si_shove_direction_fix") && g_bStaggerDirectionAvailable)
 		{
@@ -880,6 +1058,49 @@ public int DifficultyMenuHandler(Menu menu, MenuAction action, int client, int i
 			g_cvTankMeleeFury.BoolValue = !g_cvTankMeleeFury.BoolValue;
 			SavePersistentSettings();
 			PrintToChat(client, "\x04[难度]\x01 Tank 近战反制（无上限）已%s。", g_cvTankMeleeFury.BoolValue ? "开启" : "关闭");
+		}
+		else if (StrEqual(info, "tank_punch_force_primary"))
+		{
+			g_cvTankPunchForcePrimary.BoolValue = !g_cvTankPunchForcePrimary.BoolValue;
+			SavePersistentSettings();
+			PrintToChat(client, "\x04[难度]\x01 持近战挨 Tank 拳后切主枪已%s。", g_cvTankPunchForcePrimary.BoolValue ? "开启" : "关闭");
+		}
+		else if (StrEqual(info, "ai_tank_prop_cleanup"))
+		{
+			g_cvAiTankPropCleanup.BoolValue = !g_cvAiTankPropCleanup.BoolValue;
+			SavePersistentSettings();
+			PrintToChat(client, "\x04[难度]\x01 AI Tank 战后物件清理已%s。", g_cvAiTankPropCleanup.BoolValue ? "开启" : "关闭");
+		}
+		else if (StrEqual(info, "block_autoaim"))
+		{
+			if (!CanToggleBlockAutoaim(client))
+			{
+				PrintToChat(client, "\x04[难度]\x01 只有有权限的管理员可以切换辅助瞄准限制。");
+			}
+			else if (!IsBlockAutoaimAvailable())
+			{
+				PrintToChat(client, "\x04[难度]\x01 禁用原生辅助瞄准功能不可用。");
+			}
+			else
+			{
+				g_cvBlockAutoaim.BoolValue = !g_cvBlockAutoaim.BoolValue;
+				SavePersistentSettings();
+				PrintToChat(client, "\x04[难度]\x01 禁用原生辅助瞄准：%s。",
+					IsBlockAutoaimAvailable() ? (IsBlockAutoaimActive() ? "开启" : "关闭") : "不可用");
+			}
+		}
+		else if (StrEqual(info, "texture_check"))
+		{
+			if (!CanToggleTextureCheck(client))
+			{
+				PrintToChat(client, "\x04[难度]\x01 只有有权限的管理员可以切换材质调试项检查。");
+			}
+			else
+			{
+				g_cvTextureCheck.BoolValue = !g_cvTextureCheck.BoolValue;
+				SavePersistentSettings();
+				PrintToChat(client, "\x04[难度]\x01 材质调试项检查已%s。", g_cvTextureCheck.BoolValue ? "开启" : "关闭");
+			}
 		}
 		else if (StrEqual(info, "rock_lagcomp"))
 		{
@@ -917,6 +1138,41 @@ public int DifficultyMenuHandler(Menu menu, MenuAction action, int client, int i
 			PrintToChat(client, "\x04[难度]\x01 重复/遗漏起身修复（多人）已%s。", g_cvMultiGetupFix.BoolValue ? "开启" : "关闭");
 		}
 
+		else if (StrEqual(info, "ellis_hunter_getup_fix"))
+		{
+			g_cvEllisHunterGetupFix.BoolValue = !g_cvEllisHunterGetupFix.BoolValue;
+			SavePersistentSettings();
+			PrintToChat(client, "\x04[难度]\x01 Ellis 被 Hunter 扑后起身统一已%s。", g_cvEllisHunterGetupFix.BoolValue ? "开启" : "关闭");
+		}
+
+		else if (StrEqual(info, "quiet_chat"))
+		{
+			if (!CanToggleQuietChat(client))
+			{
+				PrintToChat(client, "\x04[难度]\x01 只有有权限的管理员可以切换聊天过滤。");
+			}
+			else
+			{
+				g_cvQuietChat.BoolValue = !g_cvQuietChat.BoolValue;
+				SavePersistentSettings();
+				PrintToChat(client, "\x04[难度]\x01 隐藏变量变更和 ! 命令原文已%s。", g_cvQuietChat.BoolValue ? "开启" : "关闭");
+			}
+		}
+
+		else if (StrEqual(info, "spitter_gascan"))
+		{
+			if (!CanToggleSpitterGascan(client) || !IsSpitterGascanAvailable())
+			{
+				PrintToChat(client, "\x04[难度]\x01 无法切换酸液点燃油桶。");
+			}
+			else
+			{
+				g_cvSpitterGascan.BoolValue = !g_cvSpitterGascan.BoolValue;
+				SavePersistentSettings();
+				PrintToChat(client, "\x04[难度]\x01 酸液点燃油桶已%s。", g_cvSpitterGascan.BoolValue ? "开启" : "关闭");
+			}
+		}
+
 		ShowDifficultyMenu(client);
 	}
 	else if (action == MenuAction_End)
@@ -929,8 +1185,12 @@ public int DifficultyMenuHandler(Menu menu, MenuAction action, int client, int i
 
 public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
 {
+	StartSpitterGascanRound();
+	ResetAiTankPropCleanup();
+	ClearAllEllisHunterGetups();
+	ClearPendingInvisibleDeathSpit();
+	g_iDeathSpitProjectileDepth = 0;
 	ResetAllHunterPounceState();
-	ResetAllSmokerTongueState();
 	g_bTankWaterNoSlowdownActive = false;
 	ResetAllTankFlyingIncapState();
 	ResetAllMultiGetupState();
@@ -939,6 +1199,7 @@ public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
 
 public void Event_TankSpawn(Event event, const char[] name, bool dontBroadcast)
 {
+	CancelAiTankPropCleanupTimer();
 	if (g_cvTankWaterNoSlowdown.BoolValue && !g_bTankWaterNoSlowdownActive)
 	{
 		g_bTankWaterNoSlowdownActive = true;
@@ -949,10 +1210,13 @@ public void Event_TankSpawn(Event event, const char[] name, bool dontBroadcast)
 public void Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast)
 {
 	int client = GetClientOfUserId(event.GetInt("userid"));
+	ClearEllisHunterGetup(client);
+	ClearJockeyRideHitboxForClient(client);
 	ResetMultiGetupState(client);
 	MergedGetupOnPlayerDeath(client);
 	if (IsTankClient(client))
 	{
+		AiTankPropCleanupOnTankDeath(client);
 		CreateTimer(0.1, Timer_CheckTankWaterNoSlowdown, _, TIMER_FLAG_NO_MAPCHANGE);
 	}
 }
@@ -1202,12 +1466,16 @@ public void Event_GetupPounceStopped(Event event, const char[] name, bool dontBr
 
 public void Event_GetupJockeyRide(Event event, const char[] name, bool dontBroadcast)
 {
-	MergedGetupOnJockeyRide(GetClientOfUserId(event.GetInt("victim")));
+	int victim = GetClientOfUserId(event.GetInt("victim"));
+	JockeyRideHitboxOnRideStart(victim);
+	MergedGetupOnJockeyRide(victim);
 }
 
 public void Event_GetupJockeyRideEnd(Event event, const char[] name, bool dontBroadcast)
 {
-	MergedGetupOnJockeyRideEnd(GetClientOfUserId(event.GetInt("victim")));
+	int victim = GetClientOfUserId(event.GetInt("victim"));
+	JockeyRideHitboxOnRideEnd(victim, event.GetInt("userid"));
+	MergedGetupOnJockeyRideEnd(victim);
 }
 
 public void Event_GetupChargerImpact(Event event, const char[] name, bool dontBroadcast)
@@ -1410,12 +1678,20 @@ public Action Timer_MultiGetupCancel(Handle timer, int userid)
 
 public void Event_GetupPlayerBotReplace(Event event, const char[] name, bool dontBroadcast)
 {
-	MergedGetupHandlePlayerReplace(GetClientOfUserId(event.GetInt("bot")), GetClientOfUserId(event.GetInt("player")));
+	int replacer = GetClientOfUserId(event.GetInt("bot"));
+	int replacee = GetClientOfUserId(event.GetInt("player"));
+	JockeyRideHitboxOnReplace(replacer, replacee);
+	EllisHunterGetupOnReplace(replacer, replacee);
+	MergedGetupHandlePlayerReplace(replacer, replacee);
 }
 
 public void Event_GetupBotPlayerReplace(Event event, const char[] name, bool dontBroadcast)
 {
-	MergedGetupHandlePlayerReplace(GetClientOfUserId(event.GetInt("player")), GetClientOfUserId(event.GetInt("bot")));
+	int replacer = GetClientOfUserId(event.GetInt("player"));
+	int replacee = GetClientOfUserId(event.GetInt("bot"));
+	JockeyRideHitboxOnReplace(replacer, replacee);
+	EllisHunterGetupOnReplace(replacer, replacee);
+	MergedGetupHandlePlayerReplace(replacer, replacee);
 }
 
 stock void TransferMultiGetupState(int from, int to)
@@ -1752,8 +2028,8 @@ public void Event_PlayerSpawn(Event event, const char[] name, bool dontBroadcast
 	int client = GetClientOfUserId(event.GetInt("userid"));
 	if (client > 0)
 	{
+		ClearEllisHunterGetup(client);
 		ResetHunterPounceState(client);
-		ResetSmokerTongueState(client);
 		g_iIncapEventTick[client] = 0;
 		ResetMultiGetupState(client);
 		ResetMergedGetupState(client);
@@ -1871,6 +2147,8 @@ public Action Hook_OnTakeDamage(int victim, int &attacker, int &inflictor, float
 // 不设下限或叠加上限：连续近战命中会持续将两个可攻击时间向前推进。
 public void Event_PlayerHurt(Event event, const char[] name, bool dontBroadcast)
 {
+	QueueTankPunchForcePrimary(event);
+
 	if (!g_cvTankMeleeFury.BoolValue || g_cvTankSwingInterval == null || g_cvTankWindupTime == null)
 	{
 		return;
@@ -2382,92 +2660,12 @@ float Clamp(float value, float valueMin, float valueMax)
 // 因此可与 aggresive_specials_patch 的 Director 强攻逻辑并用。
 public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float velocity[3], float angles[3], int &weapon)
 {
-	Action result = Plugin_Continue;
-
 	if (g_cvAiHunterPounce.BoolValue && IsAiHunter(client))
 	{
-		result = HandleAiHunterPounce(client, buttons, velocity, angles);
+		return HandleAiHunterPounce(client, buttons, velocity, angles);
 	}
 
-	if (g_cvAiSmokerTongue.BoolValue && IsAiSmoker(client))
-	{
-		Action smokerResult = HandleAiSmokerTongue(client, buttons, angles);
-		if (smokerResult != Plugin_Continue)
-		{
-			result = smokerResult;
-		}
-	}
-
-	return result;
-}
-
-// 仅保留 ai_smoker_new 的主动伸舌部分：AI 对可见的当前目标进行胸口瞄准，
-// 并在合理距离内主动按下舌头技能键。不包含连跳、传送或目标策略重写。
-Action HandleAiSmokerTongue(int smoker, int &buttons, float angles[3])
-{
-	if (GetEntPropEnt(smoker, Prop_Send, "m_tongueVictim") > 0 || L4D_IsPlayerStaggering(smoker))
-	{
-		return Plugin_Continue;
-	}
-
-	int target = GetClientAimTarget(smoker, true);
-	if (!IsMobileSurvivor(target) || !view_as<bool>(GetEntProp(smoker, Prop_Send, "m_hasVisibleThreats")))
-	{
-		return Plugin_Continue;
-	}
-
-	float smokerPosition[3];
-	float targetPosition[3];
-	GetClientAbsOrigin(smoker, smokerPosition);
-	GetClientAbsOrigin(target, targetPosition);
-	float distance = GetVectorDistance(smokerPosition, targetPosition);
-
-	AimAtSurvivorChest(smoker, target, angles);
-	TeleportEntity(smoker, NULL_VECTOR, angles, NULL_VECTOR);
-
-	if (GetGameTime() < g_fSmokerNextTongue[smoker])
-	{
-		return Plugin_Changed;
-	}
-
-	float maximumTongueDistance = g_cvTongueRange.FloatValue * SMOKER_TONGUE_DISTANCE_PERCENT;
-	if (distance > 0.0 && distance < maximumTongueDistance)
-	{
-		buttons |= IN_ATTACK2;
-		g_fSmokerNextTongue[smoker] = GetGameTime() + SMOKER_TONGUE_COMMAND_INTERVAL;
-		return Plugin_Changed;
-	}
-
-	return Plugin_Changed;
-}
-
-void AimAtSurvivorChest(int attacker, int target, float angles[3])
-{
-	float attackerEyePosition[3];
-	float targetPosition[3];
-	float direction[3];
-	GetClientEyePosition(attacker, attackerEyePosition);
-	GetClientAbsOrigin(target, targetPosition);
-	targetPosition[2] += 45.0;
-	MakeVectorFromPoints(attackerEyePosition, targetPosition, direction);
-	GetVectorAngles(direction, angles);
-	angles[2] = 0.0;
-}
-
-void ResetAllSmokerTongueState()
-{
-	for (int client = 1; client <= MaxClients; client++)
-	{
-		ResetSmokerTongueState(client);
-	}
-}
-
-void ResetSmokerTongueState(int client)
-{
-	if (client > 0 && client <= MaxClients)
-	{
-		g_fSmokerNextTongue[client] = 0.0;
-	}
+	return Plugin_Continue;
 }
 
 Action HandleAiHunterPounce(int hunter, int &buttons, float velocity[3], float angles[3])
@@ -2759,13 +2957,6 @@ bool IsHunter(int client)
 bool IsAiHunter(int client)
 {
 	return IsHunter(client) && IsFakeClient(client) && GetEntProp(client, Prop_Send, "m_isGhost") == 0;
-}
-
-bool IsAiSmoker(int client)
-{
-	return client > 0 && client <= MaxClients && IsClientInGame(client) && IsPlayerAlive(client) && IsFakeClient(client)
-		&& GetClientTeam(client) == TEAM_INFECTED && GetEntProp(client, Prop_Send, "m_zombieClass") == Z_SMOKER
-		&& GetEntProp(client, Prop_Send, "m_isGhost") == 0;
 }
 
 bool IsTank(int client)
